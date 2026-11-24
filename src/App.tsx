@@ -3,15 +3,15 @@ import React, { useState, useEffect, useMemo } from 'react';
 
 /**
  * ============================================================================
- * SIMULADOR DE CASOS DE INTEGRIDAD MIDIS (ARCHIVO ÚNICO AUTOCONTENIDO)
+ * SIMULADOR DE CASOS DE INTEGRIDAD MIDIS (v3.0 - ARCHIVO ÚNICO AUTOCONTENIDO)
  * ============================================================================
  * Taller Virtual: Integridad en la gestión pública para la entrega de servicios
  * Público objetivo: Servidores y directivos de Gobiernos Regionales y Locales
  * Puntaje total: 20.0 puntos (12 preguntas en 3 casos territoriales)
- * Mecánica: Intento único + Sustento abierto obligatorio + Retroalimentación
- *             inmediata socrática y complementaria basada en rúbrica.
  * ============================================================================
  */
+
+const APP_VERSION = 'v3.0';
 
 const BRAND_PRESETS = {
   midisClasico: {
@@ -46,11 +46,18 @@ const STORAGE_KEYS = {
   CONFIG: 'midis_sim_config_v3',
 };
 
+const LEGACY_KEYS = [
+  'midis_sim_cohort',
+  'midis_sim_cohort_v1',
+  'midis_sim_cohort_v2',
+  'midis_sim_active_session_v2',
+];
+
 const DEFAULT_CONFIG = {
   entityTitle: 'Simulador de Casos de Integridad Midis',
   workshopSubtitle: 'Taller Virtual: Integridad en la gestión pública para la entrega de servicios',
   brandPreset: 'midisClasico',
-  customLogoDataUrl: '/logo-midis.png',
+  customLogoDataUrl: '',
   instructorUser: 'docente.midis',
   instructorPass: 'Integridad2026',
   passingThreshold: 14.0,
@@ -58,22 +65,37 @@ const DEFAULT_CONFIG = {
 };
 
 /**
- * Emblema institucional oficial del Midis con carga prioritaria de /logo-midis.png
- * y respaldo vectorial fiel de alta nitidez sin recortes.
+ * Emblema institucional del Midis:
+ * 1) Prioriza el logotipo cargado desde Configuración Docente (DataURL).
+ * 2) Luego intenta cargar desde /public (/logo-midis.png, /MIDIS.png, /MIDIS (1).png).
+ * 3) Como respaldo final renderiza el emblema vectorial sin recortes.
  */
 function MidisLogoBadge({ customLogo, className = 'h-12' }) {
-  const [imgError, setImgError] = useState(false);
-
-  useEffect(() => {
-    setImgError(false);
+  const candidates = useMemo(() => {
+    const list = [];
+    if (customLogo && customLogo.trim() !== '') {
+      list.push(customLogo);
+    }
+    ['/logo-midis.png', '/MIDIS.png', '/MIDIS (1).png'].forEach((path) => {
+      if (!list.includes(path)) list.push(path);
+    });
+    return list;
   }, [customLogo]);
 
-  if (customLogo && !imgError) {
+  const [candidateIdx, setCandidateIdx] = useState(0);
+
+  useEffect(() => {
+    setCandidateIdx(0);
+  }, [customLogo]);
+
+  const currentSrc = candidates[candidateIdx];
+
+  if (currentSrc) {
     return (
       <img
-        src={customLogo}
+        src={currentSrc}
         alt="Ministerio de Desarrollo e Inclusión Social - PERÚ"
-        onError={() => setImgError(true)}
+        onError={() => setCandidateIdx((prev) => prev + 1)}
         className={`${className} w-auto max-w-[330px] object-contain select-none`}
       />
     );
@@ -86,7 +108,6 @@ function MidisLogoBadge({ customLogo, className = 'h-12' }) {
       role="img"
       aria-label="República del Perú - Ministerio de Desarrollo e Inclusión Social"
     >
-      {/* Bloque izquierdo blanco con Escudo Nacional */}
       <rect x="0" y="0" width="126" height="125" fill="#FFFFFF" />
       <text
         x="63"
@@ -100,40 +121,35 @@ function MidisLogoBadge({ customLogo, className = 'h-12' }) {
       >
         REPÚBLICA DEL PERÚ
       </text>
-      {/* Corona de encina */}
       <ellipse cx="63" cy="31" rx="14" ry="6.5" fill="none" stroke="#15803D" strokeWidth="4.2" />
-      {/* Banderas laterales */}
       <path d="M23 36 L43 44 L43 96 L27 89 Z" fill="#D91023" />
       <path d="M25 56 L43 62 L43 72 L26 66 Z" fill="#FFFFFF" />
       <path d="M103 36 L83 44 L83 96 L99 89 Z" fill="#D91023" />
       <path d="M101 56 L83 62 L83 72 L100 66 Z" fill="#FFFFFF" />
-      {/* Escudo central */}
       <path
         d="M42 43 H84 V75 C84 93 63 105 63 105 C63 105 42 93 42 75 Z"
         fill="#FFFFFF"
         stroke="#CA8A04"
         strokeWidth="2.5"
       />
-      {/* Cuartel superior izquierdo (Vicuña sobre fondo celeste) */}
       <rect x="44.5" y="45.5" width="17.5" height="23" fill="#38BDF8" />
-      <path d="M50 66 L51 57 L55 56 L57 49 L59 50 L58 57 L57 66" stroke="#92400E" strokeWidth="2.2" fill="none" />
-      {/* Cuartel superior derecho (Árbol de la Quina sobre fondo blanco) */}
+      <path
+        d="M50 66 L51 57 L55 56 L57 49 L59 50 L58 57 L57 66"
+        stroke="#92400E"
+        strokeWidth="2.2"
+        fill="none"
+      />
       <rect x="64" y="45.5" width="17.5" height="23" fill="#FFFFFF" />
       <line x1="72.5" y1="66" x2="72.5" y2="54" stroke="#78350F" strokeWidth="2" />
       <circle cx="72.5" cy="52" r="5.5" fill="#15803D" />
-      {/* Cuartel inferior (Cornucopia sobre fondo rojo) */}
       <path
         d="M44.5 70.5 H81.5 V75 C81.5 90 63 101 63 101 C63 101 44.5 90 44.5 75 Z"
         fill="#D91023"
       />
       <path d="M51 83 C56 76 69 76 74 82 C69 87 57 88 51 83 Z" fill="#FACC15" />
-      {/* Cinta inferior */}
       <path d="M56 105 L63 114 L70 105 Z" fill="#D91023" />
 
-      {/* Filete divisor blanco */}
       <rect x="126" y="0" width="5" height="125" fill="#FFFFFF" />
-
-      {/* Bloque central rojo PERÚ */}
       <rect x="131" y="0" width="118" height="125" fill="#E30613" />
       <text
         x="190"
@@ -148,10 +164,7 @@ function MidisLogoBadge({ customLogo, className = 'h-12' }) {
         PERÚ
       </text>
 
-      {/* Filete divisor blanco */}
       <rect x="249" y="0" width="5" height="125" fill="#FFFFFF" />
-
-      {/* Bloque derecho gris institucional */}
       <rect x="254" y="0" width="396" height="125" fill="#575756" />
       <text
         x="275"
@@ -188,7 +201,8 @@ const CASES_DATA = [
     number: 1,
     title: 'Focalización territorial sin favoritismos',
     role: 'Gerente de Desarrollo Social – Municipalidad Distrital',
-    normativeFocus: 'Ley N° 31564 (Conflicto de Intereses) · Ley N° 27815 (Código de Ética) · Sistema Nacional de Focalización (Sinafo)',
+    normativeFocus:
+      'Ley N° 31564 (Conflicto de Intereses) · Ley N° 27815 (Código de Ética) · Sistema Nacional de Focalización (Sinafo)',
     contextSummary:
       'La Municipalidad Distrital ejecuta el barrido focalizado de hogares para actualizar la Clasificación Socioeconómica (CSE) en el Padrón General de Hogares (PGH) del Midis. Se presentan tres tensiones críticas en un plazo de 48 horas.',
     narrativeBlocks: [
@@ -357,7 +371,8 @@ const CASES_DATA = [
     number: 2,
     title: 'Custodia de recursos alimentarios y contratación transparente',
     role: 'Jefe de la Oficina de Abastecimiento y Almacén – Gobierno Regional',
-    normativeFocus: 'Ley N° 27815 (Uso Adecuado de Bienes del Estado y Probidad) · Directiva N° 001-2022-MIDIS (Anexo 2: Pautas en Contrataciones)',
+    normativeFocus:
+      'Ley N° 27815 (Uso Adecuado de Bienes del Estado y Probidad) · Directiva N° 001-2022-MIDIS (Anexo 2: Pautas en Contrataciones)',
     contextSummary:
       'Durante la atención de una emergencia alimentaria y la ejecución del Programa de Complementación Alimentaria (PCA), se detectan irregularidades en el almacén central y en un proceso de adquisición de conservas y menestras.',
     narrativeBlocks: [
@@ -526,7 +541,8 @@ const CASES_DATA = [
     number: 3,
     title: 'Gestión de denuncias y protección efectiva al denunciante',
     role: 'Oficial de Integridad / Responsable de Atención de Denuncias',
-    normativeFocus: 'D. Leg. N° 1327 y D.S. N° 010-2017-JUS · Directiva N° 001-2022-MIDIS (Versión N° 02, R.M. N° 157-2026-MIDIS)',
+    normativeFocus:
+      'D. Leg. N° 1327 y D.S. N° 010-2017-JUS · Directiva N° 001-2022-MIDIS (Versión N° 02, R.M. N° 157-2026-MIDIS)',
     contextSummary:
       'Una servidora contratada bajo régimen CAS en una oficina desconcentrada acude a su despacho visiblemente afectada para denunciar que su coordinador zonal exige cobros indebidos a gestores locales a cambio de acelerar expedientes de subvenciones.',
     narrativeBlocks: [
@@ -693,7 +709,7 @@ const CASES_DATA = [
 ];
 
 /**
- * Datos de demostración opcionales (solo se cargan si el docente presiona "Restaurar Demo")
+ * Datos de demostración opcionales (solo se cargan si el docente presiona "Cargar Demo")
  */
 const DEMO_COHORT = [
   {
@@ -750,6 +766,11 @@ const DEMO_COHORT = [
  * ============================================================================
  */
 const storageService = {
+  clearLegacyStorage: () => {
+    try {
+      LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+    } catch {}
+  },
   loadCohort: () => {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.COHORT);
@@ -787,14 +808,7 @@ const storageService = {
       const raw = localStorage.getItem(STORAGE_KEYS.CONFIG);
       if (raw) {
         const parsed = JSON.parse(raw);
-        return {
-          ...DEFAULT_CONFIG,
-          ...parsed,
-          customLogoDataUrl:
-            parsed.customLogoDataUrl && parsed.customLogoDataUrl.trim() !== ''
-              ? parsed.customLogoDataUrl
-              : '/logo-midis.png',
-        };
+        return { ...DEFAULT_CONFIG, ...parsed };
       }
     } catch {}
     return DEFAULT_CONFIG;
@@ -878,14 +892,16 @@ function computeParticipantMetrics(participant, passingThreshold = 14.0) {
         actionPlan.push({
           horizon: 'Inmediato (7 días)',
           dimension: 'Focalización y Conflictos de Intereses',
-          action: 'Implementar formato estándar de declaración de ausencia de conflicto de intereses para comités de selección y verificar el uso del Registro de Visitas en Línea.',
+          action:
+            'Implementar formato estándar de declaración de ausencia de conflicto de intereses para comités de selección y verificar el uso del Registro de Visitas en Línea.',
           evidence: 'Actas de comité con declaración jurada y reporte semanal de visitas.',
         });
       } else {
         actionPlan.push({
           horizon: 'Sostenimiento (30 días)',
           dimension: 'Focalización y Conflictos de Intereses',
-          action: 'Replicar protocolos de control de calidad muestral en campo con la Unidad Local de Empadronamiento (ULE) y la Unidad Territorial del Midis.',
+          action:
+            'Replicar protocolos de control de calidad muestral en campo con la Unidad Local de Empadronamiento (ULE) y la Unidad Territorial del Midis.',
           evidence: 'Informe de supervisión cruzada del Padrón General de Hogares.',
         });
       }
@@ -898,14 +914,16 @@ function computeParticipantMetrics(participant, passingThreshold = 14.0) {
         actionPlan.push({
           horizon: 'Inmediato (7 días)',
           dimension: 'Custodia de Recursos y Contrataciones',
-          action: 'Instaurar doble firma obligatoria (Almacén + Desarrollo Social) en guías de salida de alimentos y checklist de banderas rojas en requerimientos.',
+          action:
+            'Instaurar doble firma obligatoria (Almacén + Desarrollo Social) en guías de salida de alimentos y checklist de banderas rojas en requerimientos.',
           evidence: 'Guías de remisión auditadas y checklist adjunto a expedientes de compra.',
         });
       } else {
         actionPlan.push({
           horizon: 'Sostenimiento (30 días)',
           dimension: 'Custodia de Recursos y Contrataciones',
-          action: 'Incorporar el Anexo 2 de pautas para denunciar actos de corrupción en todas las bases y órdenes de compra/servicio.',
+          action:
+            'Incorporar el Anexo 2 de pautas para denunciar actos de corrupción en todas las bases y órdenes de compra/servicio.',
           evidence: 'Bases administrativas publicadas con cláusula e instructivo anticorrupción.',
         });
       }
@@ -918,14 +936,16 @@ function computeParticipantMetrics(participant, passingThreshold = 14.0) {
         actionPlan.push({
           horizon: 'Inmediato (7 días)',
           dimension: 'Canal de Denuncias y Protección al Denunciante',
-          action: 'Socializar la Directiva N° 001-2022-MIDIS (Versión N° 02) y el flujo de derivación con código cifrado hacia STPAD, OCI y Procuraduría Pública.',
+          action:
+            'Socializar la Directiva N° 001-2022-MIDIS (Versión N° 02) y el flujo de derivación con código cifrado hacia STPAD, OCI y Procuraduría Pública.',
           evidence: 'Constancia de difusión interna y matriz de seguimiento de denuncias.',
         });
       } else {
         actionPlan.push({
           horizon: 'Sostenimiento (30 días)',
           dimension: 'Canal de Denuncias y Protección al Denunciante',
-          action: 'Auditar el cumplimiento del plazo de 1 día hábil para notificar al denunciante la derivación de su caso y el seguimiento trimestral.',
+          action:
+            'Auditar el cumplimiento del plazo de 1 día hábil para notificar al denunciante la derivación de su caso y el seguimiento trimestral.',
           evidence: 'Tablero de control de plazos y reportes de seguimiento de integridad.',
         });
       }
@@ -961,12 +981,12 @@ function generatePrintableReportHtml(participant, metrics, config) {
     timeStyle: 'short',
   });
 
-  const logoSrc =
-    config.customLogoDataUrl && config.customLogoDataUrl.startsWith('/')
-      ? `${window.location.origin}${config.customLogoDataUrl}`
-      : config.customLogoDataUrl || `${window.location.origin}/logo-midis.png`;
+  const primaryLogo =
+    config.customLogoDataUrl && config.customLogoDataUrl.trim() !== ''
+      ? config.customLogoDataUrl
+      : `${window.location.origin}/logo-midis.png`;
 
-  const logoBlock = `<img src="${logoSrc}" alt="Logo Midis" style="height:54px; width:auto; max-width:310px; object-fit:contain;" />`;
+  const logoBlock = `<img src="${primaryLogo}" onerror="this.onerror=null;this.src='${window.location.origin}/MIDIS.png';" alt="Logo Midis" style="height:54px; width:auto; max-width:310px; object-fit:contain;" />`;
 
   const caseRowsHtml = metrics.caseBreakdown
     .map(
@@ -1174,7 +1194,10 @@ function downloadCsvCohort(cohort, passingThreshold) {
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
   link.href = url;
-  link.setAttribute('download', `Resultados_Taller_Integridad_Midis_${new Date().toISOString().slice(0, 10)}.csv`);
+  link.setAttribute(
+    'download',
+    `Resultados_Taller_Integridad_Midis_${new Date().toISOString().slice(0, 10)}.csv`
+  );
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
@@ -1188,8 +1211,13 @@ function downloadCsvCohort(cohort, passingThreshold) {
  */
 export default function App() {
   const [config, setConfig] = useState(() => storageService.loadConfig());
-  const [cohort, setCohort] = useState(() => storageService.loadCohort());
-  const [activeParticipantId, setActiveParticipantId] = useState(() => storageService.loadActiveId());
+  const [cohort, setCohort] = useState(() => {
+    storageService.clearLegacyStorage();
+    return storageService.loadCohort();
+  });
+  const [activeParticipantId, setActiveParticipantId] = useState(() =>
+    storageService.loadActiveId()
+  );
 
   const [viewMode, setViewMode] = useState('participant');
   const [projectorMode, setProjectorMode] = useState(false);
@@ -1262,7 +1290,10 @@ export default function App() {
   );
 
   const activeMetrics = useMemo(
-    () => (activeParticipant ? computeParticipantMetrics(activeParticipant, config.passingThreshold) : null),
+    () =>
+      activeParticipant
+        ? computeParticipantMetrics(activeParticipant, config.passingThreshold)
+        : null,
     [activeParticipant, config.passingThreshold]
   );
 
@@ -1468,6 +1499,7 @@ export default function App() {
       confirmLabel: 'Sí, limpiar todo (0 registros)',
       danger: true,
       onConfirm: () => {
+        storageService.clearLegacyStorage();
         localStorage.removeItem(STORAGE_KEYS.COHORT);
         localStorage.removeItem(STORAGE_KEYS.ACTIVE_PARTICIPANT_ID);
         setCohort([]);
@@ -1527,7 +1559,7 @@ export default function App() {
     <div className={`min-h-screen flex flex-col bg-slate-50 text-slate-800 ${rootTextSize}`}>
       {/* Barra superior de notificación (Toast) */}
       {toastMessage && (
-        <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700 flex items-center gap-3 max-w-md animate-fade-in">
+        <div className="fixed top-4 right-4 z-50 bg-slate-900 text-white px-4 py-3 rounded-xl shadow-xl border border-slate-700 flex items-center gap-3 max-w-md">
           <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 shrink-0" />
           <span className="text-sm font-medium">{toastMessage}</span>
         </div>
@@ -1535,7 +1567,7 @@ export default function App() {
 
       {/* Modal de confirmación */}
       {confirmModal && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6">
             <h3 className="text-lg font-bold text-slate-900 mb-2">{confirmModal.title}</h3>
             <p className="text-sm text-slate-600 mb-6 leading-relaxed">{confirmModal.message}</p>
@@ -1551,7 +1583,9 @@ export default function App() {
                 type="button"
                 onClick={confirmModal.onConfirm}
                 className={`px-4 py-2 rounded-lg text-white font-semibold text-sm ${
-                  confirmModal.danger ? 'bg-rose-600 hover:bg-rose-700' : 'bg-slate-900 hover:bg-slate-800'
+                  confirmModal.danger
+                    ? 'bg-rose-600 hover:bg-rose-700'
+                    : 'bg-slate-900 hover:bg-slate-800'
                 }`}
               >
                 {confirmModal.confirmLabel}
@@ -1563,7 +1597,7 @@ export default function App() {
 
       {/* Modal de autenticación docente */}
       {showInstructorLogin && (
-        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 bg-slate-900/60 flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-sm w-full p-6">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-bold text-slate-900">Acceso Vista Docente</h3>
@@ -1579,11 +1613,14 @@ export default function App() {
               </button>
             </div>
             <p className="text-xs text-slate-500 mb-4">
-              Ingrese sus credenciales institucionales para acceder al panel de monitoreo y configuración.
+              Ingrese sus credenciales institucionales para acceder al panel de monitoreo y
+              configuración.
             </p>
             <form onSubmit={handleInstructorLoginSubmit} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Usuario docente</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Usuario docente
+                </label>
                 <input
                   type="text"
                   value={loginUserInput}
@@ -1594,7 +1631,9 @@ export default function App() {
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Clave de acceso</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Clave de acceso
+                </label>
                 <input
                   type="password"
                   value={loginPassInput}
@@ -1633,7 +1672,7 @@ export default function App() {
       )}
 
       {/* CABECERA INSTITUCIONAL */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-2xs">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-4">
           <div className="flex items-center gap-4">
             <div
@@ -1681,7 +1720,7 @@ export default function App() {
                   onClick={() => setViewMode('participant')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition ${
                     viewMode === 'participant'
-                      ? 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-white text-slate-900 shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -1692,7 +1731,7 @@ export default function App() {
                   onClick={() => setViewMode('instructor')}
                   className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
                     viewMode === 'instructor'
-                      ? 'bg-white text-slate-900 shadow-xs'
+                      ? 'bg-white text-slate-900 shadow-sm'
                       : 'text-slate-600 hover:text-slate-900'
                   }`}
                 >
@@ -1717,8 +1756,7 @@ export default function App() {
             {/* A. PANTALLA DE BIENVENIDA E IDENTIFICACIÓN */}
             {!activeParticipant && (
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-                {/* Columna izquierda: Presentación y reglas */}
-                <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-2xs">
+                <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-sm">
                   <span
                     style={{ backgroundColor: preset.softBg, color: preset.primary }}
                     className="inline-block px-3 py-1 rounded-full text-xs font-extrabold tracking-wide mb-4"
@@ -1762,8 +1800,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Columna derecha: Formulario simplificado de identificación */}
-                <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-2xs">
+                <div className="lg:col-span-6 bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-sm">
                   <h2 className="text-xl md:text-2xl font-extrabold text-slate-900 mb-1">
                     Identificación del Participante
                   </h2>
@@ -1862,1156 +1899,11 @@ export default function App() {
               </div>
             )}
 
-            {/* B. ESPACIO DE TRABAJO DEL PARTICIPANTE (CASOS Y REPORTE FINAL) */}
+            {/* B. ESPACIO DE TRABAJO DEL PARTICIPANTE */}
             {activeParticipant && activeMetrics && (
               <div className="space-y-6">
-                {/* Barra de estado del participante */}
-                <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-2xs flex flex-wrap items-center justify-between gap-4">
+                <div className="bg-white rounded-2xl border border-slate-200 p-4 md:p-5 shadow-sm flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="font-extrabold text-slate-900 text-base md:text-lg">
-                        {activeParticipant.name}
-                      </span>
-                      <span className="px-2.5 py-0.5 rounded-full text-xs font-semibold bg-slate-100 text-slate-700 border border-slate-200">
-                        DNI: {activeParticipant.dni}
-                      </span>
-                      <span className="text-xs text-slate-500">{activeParticipant.email}</span>
-                    </div>
-                    <div className="mt-2 flex items-center gap-4 text-xs text-slate-600">
-                      <span>
-                        Avance:{' '}
-                        <strong className="text-slate-900">
-                          {activeMetrics.answeredCount}/12 preguntas
-                        </strong>
-                      </span>
-                      <span>
-                        Puntaje acumulado:{' '}
-                        <strong style={{ color: preset.primary }}>
-                          {activeMetrics.totalScore.toFixed(1)} / 20.0 pts
-                        </strong>
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 flex-wrap">
-                    <button
-                      type="button"
-                      onClick={() => handleOpenPrintableReport(activeParticipant)}
-                      className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-slate-800 font-bold text-xs hover:bg-slate-50 transition"
-                    >
-                      📄 Vista previa / Descargar PDF
-                    </button>
-                    <button
-                      type="button"
-                      onClick={handleExitParticipantSession}
-                      className="px-3.5 py-2 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 font-bold text-xs hover:bg-rose-100 transition"
-                    >
-                      Cambiar Participante
-                    </button>
-                  </div>
-                </div>
-
-                {/* Navegación entre los 3 casos y el Reporte Final */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-                  {CASES_DATA.map((c, idx) => {
-                    const cb = activeMetrics.caseBreakdown[idx];
-                    const isSelected = !showFinalSummary && activeCaseIndex === idx;
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        onClick={() => {
-                          setShowFinalSummary(false);
-                          setActiveCaseIndex(idx);
-                        }}
-                        className={`text-left p-4 rounded-2xl border transition ${
-                          isSelected
-                            ? 'bg-white border-slate-900 ring-2 ring-slate-900/10 shadow-xs'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between text-xs font-bold mb-1">
-                          <span style={{ color: preset.primary }}>CASO {c.number}</span>
-                          <span className="text-slate-600">
-                            {cb.score.toFixed(1)}/{cb.max.toFixed(1)} pts
-                          </span>
-                        </div>
-                        <div className="font-bold text-slate-900 text-sm line-clamp-1">{c.title}</div>
-                        <div className="mt-2 w-full bg-slate-100 h-1.5 rounded-full overflow-hidden">
-                          <div
-                            style={{
-                              width: `${(cb.answered / cb.totalQuestions) * 100}%`,
-                              backgroundColor:
-                                cb.answered === cb.totalQuestions ? '#059669' : preset.primary,
-                            }}
-                            className="h-full transition-all"
-                          />
-                        </div>
-                      </button>
-                    );
-                  })}
-
-                  <button
-                    type="button"
-                    onClick={() => setShowFinalSummary(true)}
-                    className={`text-left p-4 rounded-2xl border transition ${
-                      showFinalSummary
-                        ? 'bg-slate-900 text-white border-slate-900 shadow-xs'
-                        : 'bg-white text-slate-900 border-slate-200 hover:border-slate-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between text-xs font-bold mb-1">
-                      <span className={showFinalSummary ? 'text-emerald-400' : 'text-emerald-700'}>
-                        RESULTADOS
-                      </span>
-                      <span>{activeMetrics.totalScore.toFixed(1)}/20.0</span>
-                    </div>
-                    <div className="font-bold text-sm">Reporte Integral y Plan PDF</div>
-                    <div
-                      className={`text-xs mt-1 ${
-                        showFinalSummary ? 'text-slate-300' : 'text-slate-500'
-                      }`}
-                    >
-                      {activeMetrics.isComplete
-                        ? 'Diagnóstico completo disponible'
-                        : 'Disponible en cualquier momento'}
-                    </div>
-                  </button>
-                </div>
-
-                {/* VISTA DE CASO ACTIVO (SECUENCIAL PREGUNTA POR PREGUNTA) */}
-                {!showFinalSummary && (
-                  <div className="space-y-6">
-                    {(() => {
-                      const currentCase = CASES_DATA[activeCaseIndex];
-                      const maxUnlockedIdx = unlockedStepByCase[activeCaseIndex] ?? 0;
-
-                      return (
-                        <>
-                          {/* Ficha narrativa del caso */}
-                          <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-2xs">
-                            <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                              <span
-                                style={{ backgroundColor: preset.softBg, color: preset.primary }}
-                                className="px-3 py-1 rounded-full text-xs font-extrabold"
-                              >
-                                Caso {currentCase.number} de 3 · Rol: {currentCase.role}
-                              </span>
-                              <span className="text-xs font-semibold text-slate-500">
-                                {currentCase.normativeFocus}
-                              </span>
-                            </div>
-
-                            <h2 className="text-xl md:text-2xl font-black text-slate-900 mb-3">
-                              {currentCase.title}
-                            </h2>
-                            <p className="text-slate-700 mb-5 leading-relaxed">
-                              {currentCase.contextSummary}
-                            </p>
-
-                            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                              {currentCase.narrativeBlocks.map((blk, i) => (
-                                <div
-                                  key={i}
-                                  className="bg-slate-50 border border-slate-200 rounded-xl p-4"
-                                >
-                                  <div className="font-bold text-slate-900 text-xs mb-1.5">
-                                    {blk.label}
-                                  </div>
-                                  <p className="text-xs md:text-[13px] text-slate-600 leading-relaxed">
-                                    {blk.text}
-                                  </p>
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-
-                          {/* Preguntas del caso (avance progresivo pregunta por pregunta) */}
-                          <div className="space-y-5">
-                            {currentCase.questions.map((q, qIdx) => {
-                              const submitted = activeParticipant.answers?.[q.id];
-                              const isUnlocked = qIdx <= maxUnlockedIdx || Boolean(submitted);
-
-                              if (!isUnlocked) {
-                                return (
-                                  <div
-                                    key={q.id}
-                                    className="bg-slate-100/80 border border-dashed border-slate-300 rounded-2xl p-5 flex items-center justify-between text-slate-500"
-                                  >
-                                    <div className="flex items-center gap-3">
-                                      <span className="text-lg">🔒</span>
-                                      <div>
-                                        <div className="font-bold text-sm text-slate-700">
-                                          {q.code} · {q.competency}
-                                        </div>
-                                        <div className="text-xs">
-                                          Responda y confirme la pregunta anterior para habilitar
-                                          esta situación.
-                                        </div>
-                                      </div>
-                                    </div>
-                                    <span className="text-xs font-bold px-2.5 py-1 rounded-full bg-white border border-slate-200">
-                                      {q.points.toFixed(1)} pts
-                                    </span>
-                                  </div>
-                                );
-                              }
-
-                              const currentChoice = submitted
-                                ? submitted.optionId
-                                : draftSelections[q.id] || '';
-                              const currentJustif = submitted
-                                ? submitted.justification
-                                : draftJustifications[q.id] || '';
-                              const chosenOptionObj = q.options.find((o) => o.id === currentChoice);
-
-                              return (
-                                <div
-                                  key={q.id}
-                                  className="bg-white rounded-2xl border border-slate-200 p-6 md:p-7 shadow-2xs"
-                                >
-                                  <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-                                    <div className="flex items-center gap-2">
-                                      <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-extrabold">
-                                        {q.code}
-                                      </span>
-                                      <span className="text-xs font-bold text-slate-500">
-                                        {q.competency}
-                                      </span>
-                                    </div>
-                                    <span
-                                      className={`px-3 py-1 rounded-full text-xs font-extrabold ${
-                                        submitted
-                                          ? submitted.score === q.points
-                                            ? 'bg-emerald-100 text-emerald-800'
-                                            : submitted.score > 0
-                                            ? 'bg-amber-100 text-amber-800'
-                                            : 'bg-rose-100 text-rose-800'
-                                          : 'bg-slate-100 text-slate-700'
-                                      }`}
-                                    >
-                                      {submitted
-                                        ? `Calificado: ${submitted.score.toFixed(1)} / ${q.points.toFixed(1)} pts`
-                                        : `Valor: ${q.points.toFixed(1)} pts`}
-                                    </span>
-                                  </div>
-
-                                  <p className="font-bold text-slate-900 text-base mb-4 leading-snug">
-                                    {q.prompt}
-                                  </p>
-
-                                  <div className="space-y-2.5 mb-5">
-                                    {q.options.map((opt) => {
-                                      const isSelected = currentChoice === opt.id;
-                                      let borderClass =
-                                        'border-slate-200 hover:border-slate-300 bg-white';
-                                      if (submitted) {
-                                        if (opt.isCorrect) {
-                                          borderClass =
-                                            'border-emerald-500 bg-emerald-50/70 ring-1 ring-emerald-500';
-                                        } else if (isSelected && !opt.isCorrect) {
-                                          borderClass =
-                                            'border-rose-400 bg-rose-50/70 ring-1 ring-rose-400';
-                                        } else {
-                                          borderClass = 'border-slate-200 bg-slate-50 opacity-75';
-                                        }
-                                      } else if (isSelected) {
-                                        borderClass =
-                                          'border-slate-900 bg-slate-50 ring-1 ring-slate-900';
-                                      }
-
-                                      return (
-                                        <label
-                                          key={opt.id}
-                                          className={`flex items-start gap-3 p-3.5 rounded-xl border transition ${
-                                            submitted ? 'cursor-default' : 'cursor-pointer'
-                                          } ${borderClass}`}
-                                        >
-                                          <input
-                                            type="radio"
-                                            name={q.id}
-                                            value={opt.id}
-                                            checked={isSelected}
-                                            disabled={Boolean(submitted)}
-                                            onChange={() =>
-                                              setDraftSelections((prev) => ({
-                                                ...prev,
-                                                [q.id]: opt.id,
-                                              }))
-                                            }
-                                            className="mt-1 text-slate-900 focus:ring-slate-900"
-                                          />
-                                          <div className="flex-1 text-sm">
-                                            <span className="font-extrabold text-slate-900 mr-2">
-                                              {opt.id})
-                                            </span>
-                                            <span className="text-slate-800">{opt.text}</span>
-                                          </div>
-                                        </label>
-                                      );
-                                    })}
-                                  </div>
-
-                                  {/* Sustento abierto obligatorio */}
-                                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-4">
-                                    <label className="block text-xs font-extrabold text-slate-800 mb-1">
-                                      Sustento ético y normativo obligatorio{' '}
-                                      {!submitted && (
-                                        <span className="font-normal text-slate-500">
-                                          (mínimo {config.minJustificationChars} caracteres)
-                                        </span>
-                                      )}
-                                    </label>
-                                    <p className="text-xs text-slate-500 mb-2">
-                                      Guía: {q.rubricHint}
-                                    </p>
-                                    <textarea
-                                      rows={2}
-                                      disabled={Boolean(submitted)}
-                                      value={currentJustif}
-                                      onChange={(e) =>
-                                        setDraftJustifications((prev) => ({
-                                          ...prev,
-                                          [q.id]: e.target.value,
-                                        }))
-                                      }
-                                      placeholder="Escriba aquí el fundamento de su decisión..."
-                                      className="w-full px-3 py-2 rounded-lg border border-slate-300 bg-white text-slate-900 text-sm focus:outline-none focus:ring-2 focus:ring-slate-900 disabled:bg-slate-100"
-                                    />
-                                    {!submitted && (
-                                      <div className="flex justify-between items-center mt-1 text-[11px] text-slate-500">
-                                        <span>Intento único: una vez confirmada no podrá editarse.</span>
-                                        <span>
-                                          {currentJustif.trim().length} /{' '}
-                                          {config.minJustificationChars} caracteres
-                                        </span>
-                                      </div>
-                                    )}
-                                  </div>
-
-                                  {questionWarnings[q.id] && (
-                                    <div className="mb-4 text-xs font-semibold text-rose-700 bg-rose-50 border border-rose-200 rounded-lg px-3.5 py-2.5">
-                                      {questionWarnings[q.id]}
-                                    </div>
-                                  )}
-
-                                  {!submitted ? (
-                                    <div className="flex justify-end">
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          handleConfirmQuestion(activeCaseIndex, q, qIdx)
-                                        }
-                                        style={{ backgroundColor: preset.primary }}
-                                        className="px-5 py-2.5 rounded-xl text-white font-bold text-sm hover:opacity-95 transition cursor-pointer"
-                                      >
-                                        Confirmar Decisión y Calificar
-                                      </button>
-                                    </div>
-                                  ) : (
-                                    <div
-                                      className={`rounded-xl p-4 border ${
-                                        submitted.score === q.points
-                                          ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
-                                          : 'bg-amber-50 border-amber-200 text-amber-950'
-                                      }`}
-                                    >
-                                      <div className="font-extrabold text-xs uppercase mb-1">
-                                        Retroalimentación inmediata basada en rúbrica:
-                                      </div>
-                                      <p className="text-sm leading-relaxed">
-                                        {chosenOptionObj?.feedback}
-                                      </p>
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-
-                          {/* Botonera inferior de navegación entre casos */}
-                          <div className="flex flex-wrap items-center justify-between gap-4 pt-2">
-                            <button
-                              type="button"
-                              disabled={activeCaseIndex === 0}
-                              onClick={() => {
-                                setActiveCaseIndex((prev) => Math.max(0, prev - 1));
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                              }}
-                              className="px-4 py-2.5 rounded-xl border border-slate-300 bg-white text-slate-700 font-bold text-sm disabled:opacity-40 hover:bg-slate-50"
-                            >
-                              ← Caso Anterior
-                            </button>
-
-                            {activeCaseIndex < CASES_DATA.length - 1 ? (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setActiveCaseIndex((prev) => prev + 1);
-                                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                                }}
-                                style={{ backgroundColor: preset.secondary }}
-                                className="px-5 py-2.5 rounded-xl text-white font-bold text-sm hover:opacity-95"
-                              >
-                                Continuar al Caso {activeCaseIndex + 2} →
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setShowFinalSummary(true);
-                                  window.scrollTo({ top: 0, behavior: 'smooth' });
-                                }}
-                                style={{ backgroundColor: preset.primary }}
-                                className="px-6 py-3 rounded-xl text-white font-extrabold text-sm hover:opacity-95 shadow-sm"
-                              >
-                                Ver Reporte Integral y Plan de Acción →
-                              </button>
-                            )}
-                          </div>
-                        </>
-                      );
-                    })()}
-                  </div>
-                )}
-
-                {/* VISTA DE REPORTE INTEGRAL FINAL DEL PARTICIPANTE */}
-                {showFinalSummary && (
-                  <div className="bg-white rounded-2xl border border-slate-200 p-6 md:p-8 shadow-2xs space-y-6">
-                    <div className="flex flex-wrap items-start justify-between gap-4 border-b border-slate-200 pb-5">
-                      <div>
-                        <span className="text-xs font-extrabold uppercase tracking-wider text-emerald-700">
-                          Diagnóstico Final de Competencias Éticas
-                        </span>
-                        <h2 className="text-2xl md:text-3xl font-black text-slate-900 mt-1">
-                          Reporte Integral y Plan de Acción Territorial
-                        </h2>
-                        <p className="text-sm text-slate-500 mt-1">
-                          Participante: <strong>{activeParticipant.name}</strong> · DNI{' '}
-                          {activeParticipant.dni}
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => handleOpenPrintableReport(activeParticipant)}
-                        style={{ backgroundColor: preset.primary }}
-                        className="px-5 py-3 rounded-xl text-white font-extrabold text-sm shadow-sm hover:opacity-95 transition"
-                      >
-                        🖨️ Imprimir / Descargar Reporte en PDF
-                      </button>
-                    </div>
-
-                    {/* Tarjetas de puntaje y perfil */}
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                      <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 text-center flex flex-col justify-center">
-                        <span className="text-xs font-bold uppercase text-slate-500">
-                          Calificación Total
-                        </span>
-                        <div
-                          style={{ color: preset.primary }}
-                          className="text-4xl font-black my-2"
-                        >
-                          {activeMetrics.totalScore.toFixed(1)}{' '}
-                          <span className="text-base font-bold text-slate-500">/ 20.0</span>
-                        </div>
-                        <span
-                          className={`inline-block mx-auto px-3 py-1 rounded-full text-xs font-bold ${
-                            activeMetrics.passed
-                              ? 'bg-emerald-100 text-emerald-800'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {activeMetrics.passed
-                            ? `Aprobado (Umbral: ${config.passingThreshold.toFixed(1)} pts)`
-                            : `En proceso (Umbral: ${config.passingThreshold.toFixed(1)} pts)`}
-                        </span>
-                      </div>
-
-                      <div className="md:col-span-2 bg-slate-50 border border-slate-200 rounded-2xl p-5">
-                        <div className="flex items-center gap-2 mb-2">
-                          <span className="text-xs font-bold uppercase text-slate-500">
-                            Perfil Adaptativo:
-                          </span>
-                          <span
-                            className={`px-3 py-0.5 rounded-full text-xs font-extrabold border ${activeMetrics.profileBadgeColor}`}
-                          >
-                            {activeMetrics.profileTitle}
-                          </span>
-                        </div>
-                        <p className="text-sm text-slate-700 leading-relaxed">
-                          {activeMetrics.profileSummary}
-                        </p>
-                      </div>
-                    </div>
-
-                    {/* Desglose por caso */}
-                    <div>
-                      <h3 className="font-extrabold text-slate-900 text-base mb-3">
-                        Desempeño por Caso Territorial
-                      </h3>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {activeMetrics.caseBreakdown.map((cb) => (
-                          <div
-                            key={cb.caseId}
-                            className="border border-slate-200 rounded-xl p-4 bg-white"
-                          >
-                            <div className="flex justify-between text-xs font-bold mb-1">
-                              <span style={{ color: preset.primary }}>Caso {cb.number}</span>
-                              <span>
-                                {cb.score.toFixed(1)} / {cb.max.toFixed(1)} pts ({cb.percentage}%)
-                              </span>
-                            </div>
-                            <div className="font-bold text-slate-900 text-sm mb-1">{cb.title}</div>
-                            <div className="text-xs text-slate-500">{cb.role}</div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Plan de acción personalizado */}
-                    <div>
-                      <h3 className="font-extrabold text-slate-900 text-base mb-3">
-                        Plan de Acción Territorial Comprometido
-                      </h3>
-                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                        <table className="w-full text-left border-collapse text-xs md:text-sm">
-                          <thead>
-                            <tr className="bg-slate-100 text-slate-800 border-b border-slate-200">
-                              <th className="p-3 font-bold">Plazo</th>
-                              <th className="p-3 font-bold">Dimensión</th>
-                              <th className="p-3 font-bold">Acción Preventiva</th>
-                              <th className="p-3 font-bold">Evidencia Verificable</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-200">
-                            {activeMetrics.actionPlan.map((item, i) => (
-                              <tr key={i}>
-                                <td className="p-3 font-semibold text-slate-900 whitespace-nowrap">
-                                  {item.horizon}
-                                </td>
-                                <td className="p-3 font-semibold text-slate-700">
-                                  {item.dimension}
-                                </td>
-                                <td className="p-3 text-slate-600">{item.action}</td>
-                                <td className="p-3 text-slate-500">{item.evidence}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            )}
-          </>
-        )}
-
-        {/* ====================================================================
-            2. VISTA DOCENTE Y ADMINISTRACIÓN DEL SIMULADOR
-           ==================================================================== */}
-        {viewMode === 'instructor' && isInstructorAuthenticated && (
-          <div className="space-y-6">
-            {/* Cabecera del panel docente */}
-            <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs flex flex-wrap items-center justify-between gap-4">
-              <div>
-                <span
-                  style={{ color: preset.primary }}
-                  className="text-xs font-extrabold uppercase tracking-wider"
-                >
-                  Panel de Gestión Académica y Seguimiento
-                </span>
-                <h2 className="text-2xl font-black text-slate-900 mt-0.5">
-                  Vista Docente y Administración del Simulador
-                </h2>
-                <p className="text-xs md:text-sm text-slate-500 mt-0.5">
-                  Revise resultados en tiempo real, compare decisiones de múltiples participantes,
-                  descargue reportes o reinicie la sesión.
-                </p>
-              </div>
-
-              <div className="flex flex-wrap items-center gap-2.5">
-                <button
-                  type="button"
-                  onClick={() => downloadCsvCohort(cohort, config.passingThreshold)}
-                  disabled={cohort.length === 0}
-                  className="px-4 py-2 rounded-xl bg-emerald-700 text-white font-bold text-xs hover:bg-emerald-800 disabled:opacity-40 transition"
-                >
-                  📊 Descargar Excel (.CSV compatible con Excel)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleRestoreDemo}
-                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white text-slate-700 font-bold text-xs hover:bg-slate-50 transition"
-                >
-                  Cargar Demo (2 ejemplos)
-                </button>
-                <button
-                  type="button"
-                  onClick={handleResetPlatform}
-                  className="px-3.5 py-2 rounded-xl border border-rose-200 bg-rose-50 text-rose-700 font-bold text-xs hover:bg-rose-100 transition"
-                >
-                  Reiniciar Plataforma
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setIsInstructorAuthenticated(false);
-                    setViewMode('participant');
-                    showToast('Sesión docente cerrada.');
-                  }}
-                  className="px-3.5 py-2 rounded-xl border border-slate-300 bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 transition"
-                >
-                  🔒 Cerrar Sesión Docente
-                </button>
-              </div>
-            </div>
-
-            {/* Pestañas docentes */}
-            <div className="flex flex-wrap gap-2">
-              {[
-                { id: 'results', label: `Resultados por Participante (${cohort.length})` },
-                { id: 'compare', label: 'Comparador de Decisiones' },
-                { id: 'settings', label: 'Configuración Institucional y Marca' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setInstructorTab(tab.id)}
-                  className={`px-4 py-2 rounded-full text-xs font-extrabold transition ${
-                    instructorTab === tab.id
-                      ? 'bg-slate-900 text-white shadow-2xs'
-                      : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-50'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {/* PESTAÑA 1: RESULTADOS POR PARTICIPANTE */}
-            {instructorTab === 'results' && (
-              <div className="space-y-6">
-                {cohort.length === 0 ? (
-                  <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center">
-                    <div className="text-3xl mb-2">📋</div>
-                    <h3 className="text-lg font-extrabold text-slate-900">
-                      No hay registros de participantes en este navegador
-                    </h3>
-                    <p className="text-sm text-slate-500 max-w-md mx-auto mt-1 mb-5">
-                      La tabla está limpia (0 participantes). Cuando un participante inicie el
-                      simulador en este dispositivo aparecerá aquí automáticamente, o puede
-                      cargar ejemplos de prueba.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={handleRestoreDemo}
-                      className="px-4 py-2 rounded-xl border border-slate-300 text-slate-700 font-bold text-xs hover:bg-slate-50"
-                    >
-                      Cargar 2 participantes de demostración
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-2xs">
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-left border-collapse text-xs md:text-sm">
-                          <thead>
-                            <tr className="bg-slate-50 border-b border-slate-200 text-slate-700">
-                              <th className="p-4 font-bold">Participante</th>
-                              <th className="p-4 font-bold">DNI</th>
-                              <th className="p-4 font-bold">Correo</th>
-                              <th className="p-4 font-bold">Avance</th>
-                              <th className="p-4 font-bold">Puntaje (/20)</th>
-                              <th className="p-4 font-bold">Nivel Adaptativo</th>
-                              <th className="p-4 font-bold text-right">Acciones</th>
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-200">
-                            {cohort.map((p) => {
-                              const m = computeParticipantMetrics(p, config.passingThreshold);
-                              const isInspecting = selectedInspectId === p.id;
-                              return (
-                                <tr
-                                  key={p.id}
-                                  className={isInspecting ? 'bg-slate-50' : 'hover:bg-slate-50/60'}
-                                >
-                                  <td className="p-4 font-bold text-slate-900">{p.name}</td>
-                                  <td className="p-4 text-slate-600">{p.dni}</td>
-                                  <td className="p-4 text-slate-600">{p.email}</td>
-                                  <td className="p-4 text-slate-700">
-                                    {m.answeredCount}/12 ({Math.round((m.answeredCount / 12) * 100)}
-                                    %)
-                                  </td>
-                                  <td className="p-4 font-extrabold text-slate-900">
-                                    {m.totalScore.toFixed(1)} pts
-                                  </td>
-                                  <td className="p-4">
-                                    <span
-                                      className={`px-2.5 py-1 rounded-full text-xs font-bold border ${m.profileBadgeColor}`}
-                                    >
-                                      {m.profileTitle}
-                                    </span>
-                                  </td>
-                                  <td className="p-4 text-right space-x-1.5 whitespace-nowrap">
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setSelectedInspectId(isInspecting ? null : p.id)
-                                      }
-                                      className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-slate-800 font-bold text-xs hover:bg-slate-100"
-                                    >
-                                      {isInspecting ? 'Ocultar' : 'Inspeccionar'}
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleOpenPrintableReport(p)}
-                                      style={{ backgroundColor: preset.primary }}
-                                      className="px-3 py-1.5 rounded-lg text-white font-bold text-xs hover:opacity-95"
-                                    >
-                                      PDF Individual
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => handleDeleteSingleParticipant(p)}
-                                      title="Eliminar registro"
-                                      className="px-2.5 py-1.5 rounded-lg border border-rose-200 bg-rose-50 text-rose-700 font-bold text-xs hover:bg-rose-100"
-                                    >
-                                      Eliminar
-                                    </button>
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
-
-                    {/* Detalle de respuestas del participante inspeccionado */}
-                    {selectedInspectId &&
-                      (() => {
-                        const target = cohort.find((item) => item.id === selectedInspectId);
-                        if (!target) return null;
-                        return (
-                          <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-4">
-                            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-4">
-                              <div>
-                                <h3 className="text-lg font-extrabold text-slate-900">
-                                  Detalle de Respuestas: {target.name}
-                                </h3>
-                                <p className="text-xs text-slate-500">
-                                  DNI {target.dni} · {target.email}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleOpenPrintableReport(target)}
-                                style={{ backgroundColor: preset.primary }}
-                                className="px-4 py-2 rounded-xl text-white font-bold text-xs hover:opacity-95"
-                              >
-                                📄 Descargar PDF de {target.name}
-                              </button>
-                            </div>
-
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              {CASES_DATA.flatMap((c) =>
-                                c.questions.map((q) => {
-                                  const ans = target.answers?.[q.id];
-                                  return (
-                                    <div
-                                      key={q.id}
-                                      className="border border-slate-200 rounded-xl p-4 bg-slate-50/70"
-                                    >
-                                      <div className="flex justify-between items-center text-xs font-bold mb-1">
-                                        <span className="text-slate-900">
-                                          Caso {c.number} · {q.code}
-                                        </span>
-                                        <span
-                                          className={
-                                            ans?.score === q.points
-                                              ? 'text-emerald-700'
-                                              : 'text-amber-700'
-                                          }
-                                        >
-                                          {ans
-                                            ? `Elegida: ${ans.optionId} (${ans.score.toFixed(1)} pts)`
-                                            : 'Pendiente'}
-                                        </span>
-                                      </div>
-                                      <p className="text-xs text-slate-600 line-clamp-2 mb-2">
-                                        {q.prompt}
-                                      </p>
-                                      <div className="bg-white border border-slate-200 rounded-lg p-2.5 text-xs text-slate-800">
-                                        <strong>Sustento:</strong>{' '}
-                                        {ans?.justification || 'Sin respuesta registrada'}
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                              )}
-                            </div>
-                          </div>
-                        );
-                      })()}
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* PESTAÑA 2: COMPARADOR DE DECISIONES */}
-            {instructorTab === 'compare' && (
-              <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-5">
-                <div>
-                  <h3 className="text-lg font-extrabold text-slate-900">
-                    Comparador de Decisiones en Plenaria
-                  </h3>
-                  <p className="text-xs text-slate-500">
-                    Seleccione hasta 3 participantes para contrastar sus elecciones y argumentos en
-                    sala.
-                  </p>
-                </div>
-
-                {cohort.length === 0 ? (
-                  <p className="text-sm text-slate-500">
-                    No hay participantes registrados para comparar.
-                  </p>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-2">
-                      {cohort.map((p) => {
-                        const checked = compareIds.includes(p.id);
-                        return (
-                          <button
-                            key={p.id}
-                            type="button"
-                            onClick={() => {
-                              if (checked) {
-                                setCompareIds((prev) => prev.filter((id) => id !== p.id));
-                              } else if (compareIds.length < 3) {
-                                setCompareIds((prev) => [...prev, p.id]);
-                              } else {
-                                showToast('Puede comparar hasta 3 participantes simultáneamente.');
-                              }
-                            }}
-                            className={`px-3.5 py-2 rounded-xl border text-xs font-bold transition ${
-                              checked
-                                ? 'bg-slate-900 text-white border-slate-900'
-                                : 'bg-slate-50 text-slate-700 border-slate-200 hover:bg-slate-100'
-                            }`}
-                          >
-                            {checked ? '✓ ' : '+ '}
-                            {p.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-
-                    {compareIds.length > 0 && (
-                      <div className="overflow-x-auto border border-slate-200 rounded-xl">
-                        <table className="w-full text-left border-collapse text-xs">
-                          <thead>
-                            <tr className="bg-slate-100 border-b border-slate-200">
-                              <th className="p-3 font-bold w-64">Pregunta / Situación</th>
-                              {compareIds.map((id) => {
-                                const part = cohort.find((x) => x.id === id);
-                                return (
-                                  <th key={id} className="p-3 font-bold">
-                                    {part?.name}
-                                  </th>
-                                );
-                              })}
-                            </tr>
-                          </thead>
-                          <tbody className="divide-y divide-slate-200">
-                            {CASES_DATA.flatMap((c) =>
-                              c.questions.map((q) => (
-                                <tr key={q.id}>
-                                  <td className="p-3 font-semibold text-slate-800 align-top">
-                                    <div>
-                                      Caso {c.number} · {q.code}
-                                    </div>
-                                    <div className="text-[11px] font-normal text-slate-500 mt-0.5">
-                                      {q.competency}
-                                    </div>
-                                  </td>
-                                  {compareIds.map((id) => {
-                                    const part = cohort.find((x) => x.id === id);
-                                    const ans = part?.answers?.[q.id];
-                                    return (
-                                      <td key={id} className="p-3 align-top">
-                                        {ans ? (
-                                          <div>
-                                            <span
-                                              className={`inline-block px-2 py-0.5 rounded font-bold mb-1 ${
-                                                ans.score === q.points
-                                                  ? 'bg-emerald-100 text-emerald-800'
-                                                  : 'bg-amber-100 text-amber-800'
-                                              }`}
-                                            >
-                                              Opción {ans.optionId} ({ans.score.toFixed(1)} pts)
-                                            </span>
-                                            <p className="text-slate-600 italic">
-                                              "{ans.justification}"
-                                            </p>
-                                          </div>
-                                        ) : (
-                                          <span className="text-slate-400">Sin responder</span>
-                                        )}
-                                      </td>
-                                    );
-                                  })}
-                                </tr>
-                              ))
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* PESTAÑA 3: CONFIGURACIÓN INSTITUCIONAL Y MARCA */}
-            {instructorTab === 'settings' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-4">
-                  <h3 className="text-lg font-extrabold text-slate-900">
-                    Identidad Visual y Logotipo Oficial Midis
-                  </h3>
-
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                    <div className="text-xs font-bold text-slate-700 mb-2">
-                      Vista previa en vivo del logotipo activo:
-                    </div>
-                    <div className="bg-white border border-slate-200 rounded-lg p-3 inline-block">
-                      <MidisLogoBadge customLogo={config.customLogoDataUrl} className="h-12" />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      Cargar archivo de logotipo institucional (PNG/JPG)
-                    </label>
-                    <input
-                      type="file"
-                      accept="image/png, image/jpeg, image/webp"
-                      onChange={handleLogoUpload}
-                      className="block w-full text-xs text-slate-600 file:mr-3 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-bold file:bg-slate-900 file:text-white hover:file:bg-slate-800"
-                    />
-                    {logoStatusMessage && (
-                      <p className="text-xs font-semibold text-emerald-700 mt-1.5">
-                        {logoStatusMessage}
-                      </p>
-                    )}
-                  </div>
-
-                  <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        const nextConfig = { ...config, customLogoDataUrl: '/logo-midis.png' };
-                        setConfig(nextConfig);
-                        storageService.saveConfig(nextConfig);
-                        setLogoStatusMessage('Restaurado al emblema oficial del Midis.');
-                        showToast('Emblema oficial del Midis restaurado.');
-                      }}
-                      className="px-3.5 py-2 rounded-lg border border-slate-300 text-xs font-bold text-slate-700 hover:bg-slate-50"
-                    >
-                      Restaurar emblema oficial Midis
-                    </button>
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1.5">
-                      Paleta de colores institucional
-                    </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
-                      {Object.values(BRAND_PRESETS).map((bp) => (
-                        <button
-                          key={bp.id}
-                          type="button"
-                          onClick={() => {
-                            const nextConfig = { ...config, brandPreset: bp.id };
-                            setConfig(nextConfig);
-                            storageService.saveConfig(nextConfig);
-                          }}
-                          className={`p-3 rounded-xl border text-left transition ${
-                            config.brandPreset === bp.id
-                              ? 'border-slate-900 bg-slate-50 ring-1 ring-slate-900'
-                              : 'border-slate-200 hover:bg-slate-50'
-                          }`}
-                        >
-                          <div className="flex items-center gap-1.5 mb-1">
-                            <span
-                              style={{ backgroundColor: bp.primary }}
-                              className="w-3.5 h-3.5 rounded-full"
-                            />
-                            <span
-                              style={{ backgroundColor: bp.secondary }}
-                              className="w-3.5 h-3.5 rounded-full"
-                            />
-                          </div>
-                          <div className="text-xs font-bold text-slate-900">{bp.name}</div>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-2xs space-y-4">
-                  <h3 className="text-lg font-extrabold text-slate-900">
-                    Parámetros del Taller y Seguridad Docente
-                  </h3>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Título de la plataforma
-                    </label>
-                    <input
-                      type="text"
-                      value={config.entityTitle}
-                      onChange={(e) => {
-                        const nextConfig = { ...config, entityTitle: e.target.value };
-                        setConfig(nextConfig);
-                        storageService.saveConfig(nextConfig);
-                      }}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Subtítulo del taller
-                    </label>
-                    <input
-                      type="text"
-                      value={config.workshopSubtitle}
-                      onChange={(e) => {
-                        const nextConfig = { ...config, workshopSubtitle: e.target.value };
-                        setConfig(nextConfig);
-                        storageService.saveConfig(nextConfig);
-                      }}
-                      className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                    />
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-3">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Puntaje mínimo aprobatorio (/20)
-                      </label>
-                      <input
-                        type="number"
-                        step="0.5"
-                        min="1"
-                        max="20"
-                        value={config.passingThreshold}
-                        onChange={(e) => {
-                          const nextConfig = {
-                            ...config,
-                            passingThreshold: Number(e.target.value) || 14,
-                          };
-                          setConfig(nextConfig);
-                          storageService.saveConfig(nextConfig);
-                        }}
-                        className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Mínimo caracteres en sustento
-                      </label>
-                      <input
-                        type="number"
-                        min="10"
-                        max="300"
-                        value={config.minJustificationChars}
-                        onChange={(e) => {
-                          const nextConfig = {
-                            ...config,
-                            minJustificationChars: Number(e.target.value) || 25,
-                          };
-                          setConfig(nextConfig);
-                          storageService.saveConfig(nextConfig);
-                        }}
-                        className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="border-t border-slate-200 pt-4">
-                    <h4 className="text-xs font-extrabold uppercase text-slate-500 mb-2">
-                      Credenciales de Acceso Docente
-                    </h4>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Usuario docente
-                        </label>
-                        <input
-                          type="text"
-                          value={config.instructorUser}
-                          onChange={(e) => {
-                            const nextConfig = { ...config, instructorUser: e.target.value };
-                            setConfig(nextConfig);
-                            storageService.saveConfig(nextConfig);
-                          }}
-                          className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-xs font-bold text-slate-700 mb-1">
-                          Clave docente
-                        </label>
-                        <input
-                          type="text"
-                          value={config.instructorPass}
-                          onChange={(e) => {
-                            const nextConfig = { ...config, instructorPass: e.target.value };
-                            setConfig(nextConfig);
-                            storageService.saveConfig(nextConfig);
-                          }}
-                          className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
-                        />
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
-      </main>
-
-      {/* PIE DE PÁGINA INSTITUCIONAL CON ACCESO DISCRETO DOCENTE */}
-      <footer className="bg-white border-t border-slate-200 py-4 px-4 sm:px-6 text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2">
-          <div>
-            Ministerio de Desarrollo e Inclusión Social (Midis) · Oficina de Integridad Institucional
-          </div>
-          <div className="flex items-center gap-3">
-            <span>Simulador pedagógico offline-first · Datos almacenados localmente</span>
-            <button
-              type="button"
-              onClick={() => {
-                if (isInstructorAuthenticated) {
-                  setViewMode((prev) => (prev === 'instructor' ? 'participant' : 'instructor'));
-                } else {
-                  setShowInstructorLogin(true);
-                }
-              }}
-              className="text-slate-400 hover:text-slate-700 font-semibold transition cursor-pointer"
-              title="Acceso reservado para el equipo docente (Atajo: Alt + D)"
-            >
-              🔒 Docente
-            </button>
-          </div>
-        </div>
-      </footer>
-    </div>
-  );
-}
+                        {activeParticipant.
