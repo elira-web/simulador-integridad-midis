@@ -1,0 +1,36 @@
+name: Publicar Simulador en GitHub Pages
+
+on:
+  push:
+    branches: [main, master]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Instalar dependencias y compilar
+        run: |
+          npm install
+          npm run build
+
+      - name: Subir carpeta dist a GitHub Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+      - name: Desplegar sitio en producción
+        id: deployment
+        uses: actions/deploy-pages@v4
