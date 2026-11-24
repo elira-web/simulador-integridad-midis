@@ -19,11 +19,12 @@ jobs:
       - name: Configurar Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Instalar dependencias y compilar
         run: |
           npm install
+          npm install lucide-react
           npm run build
 
       - name: Subir carpeta dist a GitHub Pages
