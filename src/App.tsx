@@ -1,1144 +1,1095 @@
-// @ts-nocheck
 import React, { useState, useEffect, useMemo } from 'react';
+import {
+  ShieldCheck,
+  UserCheck,
+  FileText,
+  Award,
+  CheckCircle2,
+  XCircle,
+  Lock,
+  Unlock,
+  ArrowRight,
+  RotateCcw,
+  Download,
+  Printer,
+  BarChart3,
+  Settings,
+  BookOpen,
+  AlertTriangle,
+  HelpCircle,
+  Clock,
+  LogOut,
+  Users,
+  Sparkles,
+  Upload,
+  Check,
+  Eye,
+  X,
+} from 'lucide-react';
 
-/**
- * SIMULADOR DE CASOS DE INTEGRIDAD - MIDIS (v3.0)
- * Taller Virtual: Integridad en la gestión pública para la entrega de servicios
- * Arquitectura: React + Tailwind CSS (100% Client-Side, cero dependencias externas)
- */
+// ============================================================================
+// TIPOS E INTERFACES
+// ============================================================================
 
-const APP_VERSION = 'v3.0';
+interface OptionItem {
+  id: 'A' | 'B' | 'C' | 'D';
+  text: string;
+}
+
+interface RubricCriteria {
+  keywords: string[];
+  deepeningQuestion: string;
+  remediationQuestion: string;
+  normativeBasis: string;
+}
+
+interface QuestionItem {
+  id: string;
+  number: string;
+  title: string;
+  prompt: string;
+  points: number;
+  correctOption: 'A' | 'B' | 'C' | 'D';
+  options: OptionItem[];
+  rubric: RubricCriteria;
+}
+
+interface CaseStudy {
+  id: string;
+  number: number;
+  title: string;
+  theme: string;
+  governmentLevel: string;
+  articulation: string;
+  protagonistRole: string;
+  secondaryActors: string[];
+  scenario: string[];
+  criticalDilemma: string;
+  maxPoints: number;
+  questions: QuestionItem[];
+}
+
+interface AnswerRecord {
+  questionId: string;
+  selectedOption: 'A' | 'B' | 'C' | 'D';
+  justification: string;
+  isCorrect: boolean;
+  pointsEarned: number;
+  socraticFeedback: string;
+  answeredAt: string;
+}
+
+interface ParticipantRecord {
+  id: string;
+  fullName: string;
+  dni: string;
+  email: string;
+  startedAt: string;
+  completedAt: string | null;
+  answers: Record<string, AnswerRecord>;
+}
+
+interface AppConfig {
+  workshopTitle: string;
+  institutionName: string;
+  customLogoDataUrl: string;
+  teacherUsername: string;
+  teacherPassword: string;
+}
+
+// ============================================================================
+// CONSTANTES DE CONFIGURACIÓN Y ALMACENAMIENTO
+// ============================================================================
 
 const STORAGE_KEYS = {
   COHORT: 'midis_sim_cohort_v3',
-  SESSION: 'midis_sim_active_session_v3',
+  ACTIVE_ID: 'midis_sim_active_id_v3',
   CONFIG: 'midis_sim_config_v3',
-  LEGACY: [
-    'midis_sim_cohort_v1',
-    'midis_sim_cohort_v2',
-    'midis_sim_active_session_v1',
-    'midis_sim_active_session_v2',
-    'midis_integridad_cohort',
-  ],
 };
 
-const DEFAULT_CONFIG = {
+const LEGACY_KEYS = [
+  'midis_sim_cohort_v1',
+  'midis_sim_cohort_v2',
+  'midis_sim_active_session_v1',
+  'midis_sim_active_session_v2',
+  'midis_sim_config_v1',
+  'midis_sim_config_v2',
+];
+
+const DEFAULT_CONFIG: AppConfig = {
   workshopTitle: 'Integridad en la gestión pública para la entrega de servicios',
-  subtitle: 'Simulador de Toma de Decisiones Éticas y Articulación Territorial — MIDIS y PPSS',
+  institutionName: 'Ministerio de Desarrollo e Inclusión Social (MIDIS)',
   customLogoDataUrl: '/logo-midis.png',
-  minJustificationWords: 12,
-  passingScore: 14,
-  teacherUser: 'docente.midis',
-  teacherPass: 'Integridad2026',
+  teacherUsername: 'docente.midis',
+  teacherPassword: 'Integridad2026',
 };
 
-const CASES_DATA = [
+// Inicia siempre vacío (0 registros ficticios por defecto)
+const DEMO_COHORT: ParticipantRecord[] = [];
+
+// ============================================================================
+// UTILIDADES DE FORMATO Y ANÁLISIS SOCRÁTICO
+// ============================================================================
+
+const formatTimestamp = (iso?: string | null): string => {
+  if (!iso) return 'En curso';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d
+    .toLocaleString('es-PE', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+    .replace(',', '');
+};
+
+const analyzeJustificationSocratic = (
+  question: QuestionItem,
+  isCorrect: boolean,
+  justification: string
+): string => {
+  const normalized = justification.toLowerCase();
+  const matchedKeywords = question.rubric.keywords.filter((kw) =>
+    normalized.includes(kw.toLowerCase())
+  );
+  const missingKeywords = question.rubric.keywords.filter(
+    (kw) => !normalized.includes(kw.toLowerCase())
+  );
+
+  if (isCorrect) {
+    if (matchedKeywords.length >= 2) {
+      return `Tu sustento incorpora elementos clave de la normativa (${matchedKeywords
+        .slice(0, 2)
+        .join(', ')}). Para profundizar tu análisis en territorio: ${
+        question.rubric.deepeningQuestion
+      }`;
+    }
+    const hintConcept =
+      missingKeywords.length > 0
+        ? `conceptos como "${missingKeywords[0]}"`
+        : 'los plazos y actores responsables';
+    return `La alternativa elegida es correcta, pero tu argumentación podría fortalecerse integrando ${hintConcept}. Reflexiona: ${question.rubric.deepeningQuestion}`;
+  }
+
+  return `Analicemos el argumento que planteaste a la luz del marco de integridad: ${question.rubric.remediationQuestion}`;
+};
+
+// ============================================================================
+// BANCO DE 3 CASOS Y 12 PREGUNTAS VALIDADAS (TOTAL: 20.0 PUNTOS)
+// ============================================================================
+
+const CASES_DATA: CaseStudy[] = [
   {
-    id: 'caso-1',
+    id: 'case-1',
     number: 1,
-    code: 'CASO 01',
     title: 'Focalización bajo presión y vínculos cercanos en territorio',
-    axis: 'Conflictos de Intereses',
-    axisKey: 'conflictos',
-    level: 'Gobierno Local (Municipalidad Distrital) ↔ UT MIDIS (Pensión 65 y Contigo)',
-    role: 'Jefe/a de la Unidad Local de Empadronamiento (ULE) y Enlace Municipal de Pensión 65 y Contigo',
-    maxPoints: 6.5,
-    narrative: [
-      'En el marco de una campaña extraordinaria de cierre de brechas para actualizar la Clasificación Socioeconómica (CSE) e incorporar nuevos usuarios a los programas nacionales Pensión 65 y Contigo tras una emergencia climática, usted —en su calidad de Jefe/a de la Unidad Local de Empadronamiento (ULE)— preside el comité de selección de empadronadores temporales y valida el lote prioritario de hogares que será remitido a la Unidad Territorial (UT) del MIDIS.',
-      'Durante la revisión final de los expedientes de contratación y de focalización, identifica tres situaciones críticas que ocurren de manera simultánea y amenazan la transparencia del proceso a menos de 48 horas del corte oficial acordado con la UT del MIDIS.',
-      'En primer lugar, advierte que una de las postulantes que obtuvo el mayor puntaje técnico en la evaluación curricular es prima hermana de su cónyuge. Aunque usted no intervino en la elaboración de su expediente, le corresponde suscribir el acta de adjudicación y el contrato temporal.',
-      'En segundo lugar, un regidor distrital ingresa sin cita ni registro previo a su oficina y le exige verbalmente priorizar la ficha socioeconómica de su tío directo en el lote urgente, argumentando que "es un adulto mayor conocido del distrito y no puede esperar al siguiente padrón".',
-      'En tercer lugar, el presidente de una junta vecinal presenta un escrito formal por mesa de partes cuestionando la imparcialidad del comité por el vínculo familiar con la postulante y exigiendo su separación inmediata de todo el proceso de empadronamiento.'
+    theme: 'Gestión preventiva de conflictos de intereses y transparencia en la toma de decisiones',
+    governmentLevel: 'Gobierno Local (Municipalidad Distrital)',
+    articulation: 'Unidad Territorial (UT) del MIDIS — Programas Pensión 65 y Contigo',
+    protagonistRole:
+      'Jefe/a de la Unidad Local de Empadronamiento (ULE) y Enlace Municipal de Pensión 65 y Contigo',
+    secondaryActors: [
+      'Coordinador/a Territorial de la UT del MIDIS',
+      'Gerente de Desarrollo Social (superior inmediato)',
+      'Regidor distrital',
+      'Postulante a empadronador/a (prima hermana de tu cónyuge)',
+      'Presidente/a de una junta vecinal',
     ],
+    scenario: [
+      'En el marco de una campaña extraordinaria de cierre de brechas para actualizar la Clasificación Socioeconómica (CSE) e incorporar nuevos usuarios a Pensión 65 y Contigo tras una emergencia climática, presides el comité de selección de empadronadores temporales y validas el lote prioritario de hogares que remitirás a la UT del MIDIS.',
+      'Al revisar los expedientes, detectas tres situaciones simultáneas: (1) Una de las postulantes con mayor puntaje técnico es prima hermana de tu cónyuge; (2) Un regidor distrital acude sin registro previo a tu oficina para exigir que se priorice el expediente de su tío directo antes del cierre de corte de la UT del MIDIS; y (3) El presidente de una junta vecinal presenta un escrito cuestionando la imparcialidad del proceso por el parentesco con la postulante y exige separarte de la ULE.',
+    ],
+    criticalDilemma:
+      'Garantizar la imparcialidad y legalidad en la contratación de personal de campo y en la validación de potenciales usuarios de los PPSS frente a vínculos familiares y presiones políticas locales, activando oportunamente los mecanismos de prevención del conflicto de intereses sin paralizar el cronograma acordado con la UT del MIDIS.',
+    maxPoints: 6.5,
     questions: [
       {
-        id: 'q1_1',
-        code: '1.1',
+        id: 'q-1-1',
+        number: '1.1',
+        title: 'Diagnóstico del conflicto de intereses',
+        prompt:
+          '¿Cómo se califican técnicamente las situaciones descritas respecto a la postulante emparentada con tu cónyuge y la solicitud del regidor distrital sobre su tío?',
         points: 1.5,
-        axisKey: 'conflictos',
-        prompt: 'Respecto al vínculo familiar con la postulante a empadronadora y a la exigencia del regidor distrital para priorizar a su tío, ¿cómo se califican técnicamente estas situaciones desde el enfoque preventivo de gestión de conflictos de intereses?',
+        correctOption: 'B',
         options: [
           {
             id: 'A',
-            text: 'No existe conflicto de intereses mientras no se firme el contrato de la postulante ni se apruebe la CSE del familiar del regidor, pues aún no se ha consumado ningún beneficio económico.'
+            text: 'No existe conflicto de intereses mientras la postulante haya obtenido el mayor puntaje técnico por mérito propio y aún no se firme su contrato.',
           },
           {
             id: 'B',
-            text: 'Se configura un conflicto de intereses real respecto a la postulante (colisión directa entre el deber funcional de suscribir la adjudicación y el vínculo de parentesco por afinidad) y un riesgo de injerencia indebida que compromete la imparcialidad y la apariencia de integridad en el padrón.'
+            text: 'Existe un conflicto de intereses real en el comité de selección por el vínculo de afinidad con la postulante, y un riesgo de afectación a la imparcialidad por la injerencia del regidor, que exigen prevención antes de que se consume un beneficio indebido.',
           },
           {
             id: 'C',
-            text: 'Únicamente existe un conflicto aparente generado por la denuncia del dirigente vecinal, el cual se subsana emitiendo un comunicado aclaratorio sin modificar la conformación del comité.'
-          }
+            text: 'Solo existe un conflicto aparente causado por la queja del dirigente vecinal, el cual se resuelve publicando los puntajes finales en el mural municipal.',
+          },
+          {
+            id: 'D',
+            text: 'El conflicto únicamente se configura si el tío del regidor no cumple los requisitos socioeconómicos para ingresar a Pensión 65.',
+          },
         ],
-        correctOption: 'B',
         rubric: {
-          keywords: ['real', 'potencial', 'aparente', 'parentesco', 'afinidad', 'imparcialidad', 'deber funcional', 'interés', 'prevención', 'consumado'],
-          coreConcept: 'El conflicto de intereses es estructural y preventivo: surge cuando el interés personal o familiar (parentesco hasta cuarto grado de consanguinidad o segundo de afinidad, o vínculos cercanos) colisiona con el deber funcional de imparcialidad, antes incluso de que exista un daño o beneficio consumado.',
-          normativeRef: 'Material técnico OII-MIDIS sobre Gestión de Conflicto de Intereses; Ley N° 27815 (Art. 6 y Art. 8 num. 1) y D.S. N° 033-2005-PCM.',
-          socraticPrompt: 'Si usted decidiera continuar participando en la adjudicación argumentando que la postulante obtuvo el mayor puntaje técnico por mérito propio, ¿de qué manera se vería afectada la legitimidad institucional del padrón frente a la ciudadanía y la UT del MIDIS?'
-        }
+          keywords: ['real', 'imparcialidad', 'parentesco', 'interés', 'prevención', 'deber'],
+          deepeningQuestion:
+            '¿Qué impacto institucional tendría en la legitimidad del padrón de Pensión 65 y Contigo si esperaras a que se firme el contrato para recién reportar el vínculo?',
+          remediationQuestion:
+            'Si un servidor evalúa a un familiar directo o por afinidad dentro de un comité que preside, ¿el conflicto depende de si el postulante tiene buen puntaje o de la estructura misma de decisión donde colisionan el deber funcional y el interés particular?',
+          normativeBasis:
+            'Guía de Gestión de Conflicto de Intereses (OII-MIDIS) y Art. 8.1 de la Ley N° 27815 (Prohibición de mantener intereses en conflicto).',
+        },
       },
       {
-        id: 'q1_2',
-        code: '1.2',
+        id: 'q-1-2',
+        number: '1.2',
+        title: 'Activación de excusación vs. recusación',
+        prompt:
+          'Ante el vínculo familiar con la postulante y el escrito presentado por el presidente de la junta vecinal exigiendo tu separación, ¿qué mecanismo preventivo corresponde activar de inmediato?',
         points: 1.5,
-        axisKey: 'conflictos',
-        prompt: 'Ante el vínculo con la postulante y el escrito presentado por el presidente de la junta vecinal, ¿qué mecanismo preventivo corresponde activar de inmediato y cuál es su diferencia técnica?',
-        options: [
-          {
-            id: 'A',
-            text: 'Esperar a que el dirigente vecinal formalice una denuncia penal antes de apartarse, manteniendo la presidencia del comité para no retrasar el cronograma.'
-          },
-          {
-            id: 'B',
-            text: 'Solicitar que la postulante renuncie voluntariamente al concurso para evitar que proceda la recusación planteada por la junta vecinal.'
-          },
-          {
-            id: 'C',
-            text: 'Activar de inmediato la excusación (abstención) formal por escrito ante el superior inmediato (Gerente de Desarrollo Social) para apartarse de la evaluación y adjudicación de dicha postulante y tramitar su reemplazo, diferenciándola de la recusación que es el mecanismo ejercido por terceros.'
-          }
-        ],
         correctOption: 'C',
-        rubric: {
-          keywords: ['excusación', 'abstención', 'recusación', 'superior', 'reemplazo', 'terceros', 'apartarse', 'legalidad', 'nulidad'],
-          coreConcept: 'La excusación (abstención) es el deber proactivo del servidor de apartarse de una decisión donde tiene conflicto de intereses y comunicarlo a su superior para designar reemplazo; la recusación, en cambio, es la facultad de un tercero para solicitar la separación del servidor cuando este no se excusa.',
-          normativeRef: 'Material técnico OII-MIDIS (Mecanismos de prevención: Excusación vs. Recusación); TUO de la Ley N° 27444 (causales de abstención).',
-          socraticPrompt: '¿Qué consecuencias administrativas y sobre la validez del proceso de contratación podrían generarse si el superior inmediato no designa formalmente un reemplazo antes de suscribir el acta de adjudicación?'
-        }
-      },
-      {
-        id: 'q1_3',
-        code: '1.3',
-        points: 1.5,
-        axisKey: 'conflictos',
-        prompt: 'Frente a la visita informal del regidor distrital y la gestión preventiva del comité de selección, ¿qué medidas de trazabilidad y transparencia institucional resultan obligatorias?',
         options: [
           {
             id: 'A',
-            text: 'Atender el pedido del regidor de manera reservada para mantener buenas relaciones políticas, pero evaluar el expediente de su tío bajo los mismos criterios técnicos.'
+            text: 'Esperar a que el dirigente vecinal formalice una denuncia penal antes de apartarse, para no retrasar la campaña de empadronamiento.',
           },
           {
             id: 'B',
-            text: 'Registrar obligatoriamente la visita y el motivo de la gestión en el Registro de Visitas en Línea / Agendas Oficiales, rechazar cualquier priorización ajena a los criterios técnicos del SISFOH y verificar la presentación y actualización de la Declaración Jurada de Intereses (DJI).'
+            text: 'Rechazar el escrito del dirigente vecinal por no ser parte del comité y continuar evaluando a todos los postulantes con total normalidad.',
           },
           {
             id: 'C',
-            text: 'Elaborar un acta interna privada firmada solo por los miembros del comité sin publicarla en los portales de transparencia para evitar conflictos con el Concejo Municipal.'
-          }
+            text: 'Formular de oficio tu excusación escrita ante tu superior inmediato (Gerente de Desarrollo Social) para abstenerte de evaluar dicho expediente y tramitar tu reemplazo temporal, diferenciándola de la recusación planteada por el tercero.',
+          },
+          {
+            id: 'D',
+            text: 'Renunciar irrevocablemente a la jefatura de la ULE y devolver todo el presupuesto de la campaña a la UT del MIDIS.',
+          },
         ],
-        correctOption: 'B',
         rubric: {
-          keywords: ['registro de visitas', 'agendas oficiales', 'declaración jurada', 'dji', 'trazabilidad', 'neutralidad', 'sisfoh', 'transparencia'],
-          coreConcept: 'La trazabilidad de gestiones de intereses mediante el Registro de Visitas en Línea y el control preventivo a través de la Declaración Jurada de Intereses (DJI) neutralizan presiones políticas y garantizan la neutralidad en la focalización.',
-          normativeRef: 'Ley N° 28024 (Gestión de Intereses), Ley N° 31227 (DJI) y Principio de Neutralidad de la Ley N° 27815.',
-          socraticPrompt: '¿Cómo protege el registro transparente de audiencias y visitas tanto al servidor público como a los hogares más vulnerables del distrito frente a futuras auditorías o cuestionamientos vecinales?'
-        }
+          keywords: ['excusación', 'abstención', 'recusación', 'superior', 'reemplazo'],
+          deepeningQuestion:
+            '¿Por qué la excusación oportuna del propio servidor protege mejor la validez del acto administrativo que esperar el trámite de una recusación externa?',
+          remediationQuestion:
+            'En la gestión preventiva de conflictos de intereses, ¿a quién corresponde el deber primario de apartarse cuando detecta un vínculo familiar: al propio servidor mediante excusación o solo cuando un tercero lo recusa?',
+          normativeBasis:
+            'Material Técnico OII-MIDIS (Excusación y Recusación) y Art. 99 del TUO de la Ley N° 27444 (Causales de abstención).',
+        },
       },
       {
-        id: 'q1_4',
-        code: '1.4',
+        id: 'q-1-3',
+        number: '1.3',
+        title: 'Neutralidad y trazabilidad frente a injerencias',
+        prompt:
+          '¿Qué medidas preventivas de transparencia institucional debes aplicar frente a la visita informal del regidor distrital y la gestión del proceso de focalización?',
+        points: 1.5,
+        correctOption: 'B',
+        options: [
+          {
+            id: 'A',
+            text: 'Atender el pedido del regidor de manera reservada para mantener buenas relaciones políticas con el Concejo Municipal, sin dejar constancia escrita.',
+          },
+          {
+            id: 'B',
+            text: 'Exigir el registro obligatorio de la audiencia en el Registro de Visitas en Línea / Agendas Oficiales, evaluar el expediente del hogar estrictamente según criterios técnicos del SISFOH y verificar la actualización de la Declaración Jurada de Intereses (DJI).',
+          },
+          {
+            id: 'C',
+            text: 'Exonerar de visita domiciliaria al tío del regidor por tratarse de una autoridad electa que da fe de su condición de pobreza.',
+          },
+          {
+            id: 'D',
+            text: 'Publicar en redes sociales los datos personales y el diagnóstico médico del tío del regidor para demostrar que no hubo favorecimiento.',
+          },
+        ],
+        rubric: {
+          keywords: ['visitas', 'registro', 'agendas', 'declaración', 'dji', 'trazabilidad', 'neutralidad'],
+          deepeningQuestion:
+            '¿De qué manera el Registro de Visitas en Línea y la Declaración Jurada de Intereses (Ley N° 31227) disuaden futuras presiones sobre los empadronadores en campo?',
+          remediationQuestion:
+            'Si una autoridad local acude sin registro a pedir la priorización de un familiar, ¿qué ocurre con la trazabilidad y la neutralidad del servicio si la reunión queda fuera de los mecanismos oficiales de transparencia?',
+          normativeBasis:
+            'Ley N° 31227 (Declaración Jurada de Intereses), Mecanismos de Registro de Visitas en Línea / Agendas Oficiales y Principio de Neutralidad (Ley N° 27815).',
+        },
+      },
+      {
+        id: 'q-1-4',
+        number: '1.4',
+        title: 'Articulación colaborativa con la Unidad Territorial del MIDIS',
+        prompt:
+          '¿Cómo debes articular con el/la Coordinador/a Territorial de la UT del MIDIS para cumplir el plazo de cierre de corte sin comprometer la ética ni afectar a las familias vulnerables?',
         points: 2.0,
-        axisKey: 'conflictos',
-        prompt: '¿Cómo debe articular el/la Jefe/a de la ULE con el/la Coordinador/a Territorial de la UT del MIDIS para cumplir el plazo de cierre de brechas sin comprometer la ética ni paralizar el servicio?',
+        correctOption: 'C',
         options: [
           {
             id: 'A',
-            text: 'Suspender íntegramente el envío de todo el lote de hogares de Pensión 65 y Contigo hasta que concluya el proceso disciplinario sobre el escrito de la junta vecinal.'
+            text: 'Suspender todo el envío del lote de hogares de Pensión 65 y Contigo hasta el próximo trimestre mientras se resuelve la selección de empadronadores.',
           },
           {
             id: 'B',
-            text: 'Remitir el padrón completo incluyendo el expediente del familiar del regidor, dejando una nota al pie para que sea la UT del MIDIS quien decida si lo excluye.'
+            text: 'Enviar el padrón sin validar directamente a la UT del MIDIS para trasladarles la responsabilidad política de filtrar los expedientes observados.',
           },
           {
             id: 'C',
-            text: 'Comunicar formalmente a la UT del MIDIS la abstención parcial acotada únicamente al expediente en conflicto, asegurar la designación de su reemplazo para dicho acto y continuar sin interrupción la validación técnica del resto del padrón con asistencia de la UT.'
-          }
+            text: 'Comunicar formalmente a la UT del MIDIS tu abstención parcial y la designación de tu reemplazo para el acto en conflicto, asegurando la continuidad de la validación técnica del resto del padrón con asistencia técnica de la UT.',
+          },
+          {
+            id: 'D',
+            text: 'Contratar directamente a la prima de tu cónyuge bajo recibos por honorarios sin pasar por el comité para acelerar el empadronamiento.',
+          },
         ],
-        correctOption: 'C',
         rubric: {
-          keywords: ['abstención parcial', 'coordinador territorial', 'ut', 'midis', 'continuidad', 'reemplazo', 'articulación', 'padrón', 'adaptabilidad'],
-          coreConcept: 'La articulación colaborativa exige aislar el foco del conflicto mediante abstención parcial y reemplazo puntual, asegurando la continuidad operativa del servicio público y el cumplimiento oportuno de los cortes de afiliación con la UT del MIDIS.',
-          normativeRef: 'Modelo de Integridad (D.S. N° 148-2024-PCM) y deber de responsabilidad y adaptabilidad funcional (Ley N° 27815).',
-          socraticPrompt: 'Si usted paralizara todo el lote de focalización por un solo expediente observado, ¿cómo impactaría esa decisión en el derecho de acceso oportuno a la protección social de los demás adultos mayores y personas con discapacidad severa del distrito?'
-        }
-      }
-    ]
+          keywords: ['articulación', 'abstención', 'reemplazo', 'continuidad', 'asistencia', 'padrón'],
+          deepeningQuestion:
+            '¿Cómo equilibra esta decisión el principio de adaptabilidad operativa con el respeto irrestricto a las reglas de integridad en el cierre de brechas?',
+          remediationQuestion:
+            'Cuando surge un conflicto puntual en un expediente o postulante, ¿es ético paralizar toda la entrega de un programa social a población vulnerable o corresponde aislar el acto en conflicto mediante reemplazo y sostener el servicio?',
+          normativeBasis:
+            'Objetivo de Articulación Territorial MIDIS–GL y Deber de Responsabilidad y Continuidad del Servicio (Ley N° 27815).',
+        },
+      },
+    ],
   },
   {
-    id: 'caso-2',
+    id: 'case-2',
     number: 2,
-    code: 'CASO 02',
     title: 'Uso de recursos en custodia y transparencia en la entrega alimentaria',
-    axis: 'Transparencia de Recursos',
-    axisKey: 'recursos',
-    level: 'Gobierno Local (Municipalidad Provincial) ↔ GORE y Equipo Territorial MIDIS (PCA / Ollas Comunes)',
-    role: 'Subgerente/a de Programas Sociales y Complementación Alimentaria',
+    theme: 'Transparencia en el manejo de recursos públicos, bienes en custodia y límites frente a órdenes ilegales',
+    governmentLevel: 'Gobierno Local (Municipalidad Provincial)',
+    articulation: 'Gerencia Regional de Desarrollo Social (GORE) y Equipo Territorial del MIDIS (PCA y Ollas Comunes)',
+    protagonistRole:
+      'Subgerente/a de Programas Sociales y Complementación Alimentaria de una Municipalidad Provincial',
+    secondaryActors: [
+      'Gerente Municipal (funcionario de confianza y superior inmediato)',
+      'Representante de empresa proveedora de alimentos del PCA',
+      'Presidenta de una red de ollas comunes',
+      'Especialista de la Gerencia Regional de Desarrollo Social (GORE)',
+      'Gestor/a territorial del MIDIS',
+    ],
+    scenario: [
+      'Tras recibir una transferencia presupuestal para la atención alimentaria de comedores populares y ollas comunes, tu Subgerencia custodia en el almacén municipal un lote de alimentos no perecibles y administra dos camionetas asignadas exclusivamente a la supervisión del Programa de Complementación Alimentaria (PCA).',
+      'A dos semanas de una actividad proselitista en la provincia, ocurren tres hechos críticos: (1) El Gerente Municipal te ordena verbalmente disponer de las dos camionetas y retirar 150 canastas del almacén del PCA para repartirlas en una "jornada cívica" organizada por una agrupación política local, argumentando que "igual se entrega a población pobre y agiliza la ejecución"; (2) Un proveedor con entregas observadas por calidad ofrece cubrir "gastos de combustible y viáticos del equipo supervisor" a cambio de que firmes la conformidad sin penalidades; y (3) La presidenta de una olla común solicita por mesa de partes el cronograma de distribución, criterios de asignación y stock disponible tras rumores de desvío de raciones.',
+    ],
+    criticalDilemma:
+      'Resistir una orden superior orientada al proselitismo político con recursos alimentarios en custodia, rechazar un ofrecimiento de ventaja indebida en la cadena de suministro y garantizar transparencia activa hacia las organizaciones sociales de base en coordinación con el GORE y el MIDIS.',
     maxPoints: 6.5,
-    narrative: [
-      'Tras recibir una transferencia presupuestal destinada a la atención alimentaria de comedores populares y ollas comunes en situación de vulnerabilidad, la Subgerencia a su cargo custodia en el almacén municipal un lote de alimentos no perecibles del Programa de Complementación Alimentaria (PCA) y administra dos camionetas asignadas exclusivamente a la supervisión y distribución alimentaria.',
-      'A dos semanas de una actividad proselitista en la provincia, se desencadenan tres hechos críticos que ponen a prueba la integridad en el manejo de los recursos públicos y la transparencia hacia la población usuaria.',
-      'Primero, el Gerente Municipal —su superior jerárquico inmediato— le ordena verbalmente disponer de las dos camionetas institucionales y retirar 150 canastas del almacén del PCA para repartirlas durante una "jornada cívica" organizada por una agrupación política local, sosteniendo que "igual se entrega a población pobre y ayuda a acelerar la ejecución presupuestal".',
-      'Segundo, el representante de una empresa proveedora cuyos lotes de menestras y conservas fueron observados por incumplir especificaciones técnicas le ofrece cubrir "los gastos de combustible y viáticos de su equipo supervisor" a cambio de que firme la conformidad sin aplicar penalidades.',
-      'Tercero, la presidenta de una red de ollas comunes ingresa una solicitud formal por mesa de partes exigiendo conocer el cronograma de distribución, los criterios objetivos de asignación y el stock real en almacén, tras circular rumores de un presunto desvío de raciones.'
-    ],
     questions: [
       {
-        id: 'q2_1',
-        code: '2.1',
+        id: 'q-2-1',
+        number: '2.1',
+        title: 'Identificación de prohibiciones éticas y bienes protegidos',
+        prompt:
+          '¿Qué infracciones éticas se configuran en la disposición de camionetas y canastas para la jornada cívica política y en el ofrecimiento del proveedor?',
         points: 1.5,
-        axisKey: 'recursos',
-        prompt: 'Según la Ley del Código de Ética de la Función Pública y su Reglamento, ¿qué infracciones éticas se configuran en la disposición de camionetas/canastas para la jornada cívica y en el ofrecimiento del proveedor?',
+        correctOption: 'B',
         options: [
           {
             id: 'A',
-            text: 'Una falta administrativa leve de gestión logística, dado que los alimentos no perecibles aún se encuentran en almacén y su destino final sería población en situación de pobreza.'
+            text: 'No hay infracción ética en el uso de las canastas si los asistentes a la jornada política son personas en situación de pobreza, solo una falta administrativa leve de almacén.',
           },
           {
             id: 'B',
-            text: 'Proselitismo político mediante el uso indebido de bienes del Estado y recursos alimentarios en custodia destinados a programas sociales, junto con la prohibición de obtener o procurar ventajas indebidas frente al ofrecimiento del proveedor.'
+            text: 'Se configuran las prohibiciones éticas de realizar proselitismo político utilizando bienes públicos o de terceros bajo custodia de la entidad y de obtener o procurar ventajas indebidas.',
           },
           {
             id: 'C',
-            text: 'Únicamente una infracción contractual del proveedor, ya que el uso de camionetas municipales fuera de horario de oficina no constituye bien patrimonial protegido.'
-          }
+            text: 'Aceptar el combustible del proveedor es válido como cooperación público-privada siempre que se rinda cuenta mediante boletas simples.',
+          },
+          {
+            id: 'D',
+            text: 'Los alimentos del PCA no califican como bienes del Estado mientras no sean distribuidos formalmente a los comedores populares.',
+          },
         ],
-        correctOption: 'B',
         rubric: {
-          keywords: ['proselitismo', 'bienes del estado', 'custodia', 'ventaja indebida', 'pca', 'ollas comunes', 'patrimonio', 'uso adecuado'],
-          coreConcept: 'El Reglamento de la Ley N° 27815 define como Bienes del Estado tanto los bienes patrimoniales de la entidad como los bienes de terceros o programas sociales bajo custodia, prohibiendo tajantemente su uso para proselitismo político y cualquier ventaja indebida.',
-          normativeRef: 'Ley N° 27815 (Art. 7 num. 5, Art. 8 num. 2 y 3) y D.S. N° 033-2005-PCM (Art. 3: Bienes del Estado, Proselitismo Político y Ventaja Indebida).',
-          socraticPrompt: '¿Por qué la normativa ética equipara los bienes en custodia de programas sociales con los bienes patrimoniales propios de la municipalidad, incluso si la entrega se hiciera a personas de bajos recursos?'
-        }
+          keywords: ['proselitismo', 'custodia', 'ventaja', 'indebida', 'bienes', 'estado'],
+          deepeningQuestion:
+            '¿Por qué el Reglamento del Código de Ética (D.S. N° 033-2005-PCM) incluye expresamente los bienes de terceros bajo uso o custodia de la entidad dentro de la protección de los Bienes del Estado?',
+          remediationQuestion:
+            '¿Puede justificarse el desvío de raciones alimentarias hacia un evento partidario bajo el argumento de que "igual llega a población pobre"? ¿Qué prohibiciones del Art. 8 de la Ley N° 27815 se vulneran?',
+          normativeBasis:
+            'Art. 7.5 y Art. 8 (numerales 2 y 3) de la Ley N° 27815; Art. 3 del Reglamento aprobado por D.S. N° 033-2005-PCM.',
+        },
       },
       {
-        id: 'q2_2',
-        code: '2.2',
+        id: 'q-2-2',
+        number: '2.2',
+        title: 'Límites del deber de obediencia frente a orden ilegal',
+        prompt:
+          'Frente a la instrucción verbal del Gerente Municipal (tu superior inmediato) para entregar las 150 canastas y camionetas a la agrupación política, ¿cuál es la conducta exigible?',
         points: 1.5,
-        axisKey: 'recursos',
-        prompt: 'Frente a la instrucción verbal del Gerente Municipal para retirar las 150 canastas y utilizar las camionetas en la jornada política, ¿cuál es la conducta jurídicamente exigible al Subgerente/a?',
-        options: [
-          {
-            id: 'A',
-            text: 'Ejecutar la orden en cumplimiento del principio de lealtad y obediencia jerárquica, solicitando posteriormente que el Gerente Municipal regularice un memorando.'
-          },
-          {
-            id: 'B',
-            text: 'Entregar solo la mitad de las canastas para no confrontar a la alta dirección y compensar el stock en la siguiente compra del mes.'
-          },
-          {
-            id: 'C',
-            text: 'Negarse a ejecutar la orden por constituir una arbitrariedad e ilegalidad manifiesta, dejar constancia escrita fundamentada de la negativa y poner el hecho en conocimiento de la instancia superior y del órgano de control competente.'
-          }
-        ],
         correctOption: 'C',
-        rubric: {
-          keywords: ['obediencia', 'ilegalidad', 'arbitrariedad', 'negarse', 'constancia escrita', 'órgano de control', 'oci', 'lealtad'],
-          coreConcept: 'El deber de lealtad y obediencia tiene un límite expreso en la ley: el servidor debe abstenerse de cumplir órdenes superiores que impliquen arbitrariedad o ilegalidad manifiestas, dejando constancia escrita y reportando el hecho.',
-          normativeRef: 'Ley N° 27815 (Art. 6 num. 6: Principio de Lealtad y Obediencia; Art. 7 num. 6: Deber de Responsabilidad).',
-          socraticPrompt: 'Si usted ejecutara la orden verbal alegando subordinación jerárquica, ¿le eximiría esa obediencia de responsabilidad administrativa, civil o penal ante una intervención de la Contraloría o el Ministerio Público?'
-        }
-      },
-      {
-        id: 'q2_3',
-        code: '2.3',
-        points: 1.5,
-        axisKey: 'recursos',
-        prompt: '¿Qué acciones inmediatas corresponden frente al requerimiento de información de la presidenta de la red de ollas comunes y ante la oferta de viáticos/combustible del proveedor observado?',
         options: [
           {
             id: 'A',
-            text: 'Postergar la respuesta a la olla común hasta finalizar el trimestre y aceptar el apoyo de combustible del proveedor para acelerar las inspecciones de campo.'
+            text: 'Cumplir la orden por el principio de jerarquía y obediencia debida, solicitando después que el Gerente Municipal regularice un memorando.',
           },
           {
             id: 'B',
-            text: 'Brindar información fidedigna, completa y oportuna sobre stocks, padrones y criterios de distribución a la organización social; mantener firmes las observaciones técnicas y penalidades al proveedor; y reportar formalmente el intento de soborno.'
+            text: 'Entregar únicamente las camionetas para no indisponerse con el Gerente, pero retener las 150 canastas en el almacén.',
           },
           {
             id: 'C',
-            text: 'Responder a la dirigente vecinal que el stock del almacén es información interna reservada y resolver el contrato del proveedor sin documentar las observaciones.'
-          }
+            text: 'Negarse a ejecutar la orden por constituir una arbitrariedad e ilegalidad manifiesta, dejar constancia escrita de la negativa y poner el hecho en conocimiento de la instancia superior / órgano de control competente.',
+          },
+          {
+            id: 'D',
+            text: 'Pedir vacaciones inmediatas para que otro funcionario asuma la firma de salida del almacén durante la jornada política.',
+          },
         ],
-        correctOption: 'B',
         rubric: {
-          keywords: ['transparencia', 'fidedigna', 'completa', 'oportuna', 'stock', 'penalidades', 'observaciones', 'soborno', 'denuncia'],
-          coreConcept: 'El deber de transparencia exige entregar información fidedigna, completa y oportuna a la ciudadanía y organizaciones sociales, mientras que la integridad contractual obliga a rechazar ventajas indebidas, aplicar penalidades y denunciar actos de corrupción.',
-          normativeRef: 'Ley N° 27815 (Art. 7 num. 2: Deber de Transparencia; Art. 8 num. 2) y Directiva N° 001-2022-MIDIS v.02 (Anexo 2: Pautas en contrataciones).',
-          socraticPrompt: '¿De qué manera la entrega oportuna y verificable de los saldos de almacén a las dirigentes de ollas comunes desactiva conflictos sociales y previene el desvío de raciones?'
-        }
+          keywords: ['obediencia', 'ilegal', 'arbitrariedad', 'constancia', 'conocimiento', 'control'],
+          deepeningQuestion:
+            '¿Qué responsabilidad administrativa, civil o penal asumiría el Subgerente si ejecuta una orden verbal manifiestamente ilegal alegando subordinación jerárquica?',
+          remediationQuestion:
+            'Según el Principio de Lealtad y Obediencia (Art. 6.6 de la Ley N° 27815), ¿el deber de obedecer al superior alcanza a órdenes que implican ilegalidad o desviación política de recursos?',
+          normativeBasis:
+            'Art. 6.6 (Principio de Lealtad y Obediencia) y Art. 10 (Obligación de comunicar transgresiones) de la Ley N° 27815.',
+        },
       },
       {
-        id: 'q2_4',
-        code: '2.4',
+        id: 'q-2-3',
+        number: '2.3',
+        title: 'Transparencia activa y firmeza contractual',
+        prompt:
+          '¿Qué acciones inmediatas corresponden frente al requerimiento presentado por la presidenta de la olla común y la oferta del proveedor observado?',
+        points: 1.5,
+        correctOption: 'B',
+        options: [
+          {
+            id: 'A',
+            text: 'Denegar la información a la olla común hasta que concluya el año fiscal y firmar la conformidad al proveedor para evitar desabastecimiento.',
+          },
+          {
+            id: 'B',
+            text: 'Entregar información fidedigna, completa y oportuna sobre stocks, cronogramas y criterios de distribución a la organización social; mantener las observaciones técnicas al proveedor y reportar el intento de soborno.',
+          },
+          {
+            id: 'C',
+            text: 'Entregar solo el cronograma verbalmente a la presidenta de la olla común y aplicar al proveedor una penalidad reducida a cambio de que retire su oferta.',
+          },
+          {
+            id: 'D',
+            text: 'Derivar el pedido de la olla común al Gerente Municipal para que decida qué datos pueden hacerse públicos.',
+          },
+        ],
+        rubric: {
+          keywords: ['transparencia', 'fidedigna', 'oportuna', 'penalidades', 'observaciones', 'reportar'],
+          deepeningQuestion:
+            '¿Cómo contribuye la entrega oportuna y verificable de saldos de almacén a desactivar rumores de desvío y fortalecer la confianza de las ollas comunes?',
+          remediationQuestion:
+            'Frente a una solicitud ciudadana sobre el stock de alimentos de programas sociales y un intento de soborno de un proveedor, ¿qué exige el Deber de Transparencia (Art. 7.2) y el Deber de Probidad?',
+          normativeBasis:
+            'Art. 6.2 (Probidad), Art. 7.2 (Transparencia) y Art. 8.2 (Prohibición de ventajas indebidas) de la Ley N° 27815.',
+        },
+      },
+      {
+        id: 'q-2-4',
+        number: '2.4',
+        title: 'Articulación multinivel y vigilancia ciudadana',
+        prompt:
+          '¿Cómo debes articular con la Gerencia Regional de Desarrollo Social (GORE) y el equipo territorial del MIDIS para blindar la entrega íntegra de las raciones en territorio?',
         points: 2.0,
-        axisKey: 'recursos',
-        prompt: '¿Cómo debe articular el/la Subgerente/a con la Gerencia Regional de Desarrollo Social (GORE) y el equipo territorial del MIDIS para asegurar la entrega íntegra de las raciones en este contexto de presión?',
+        correctOption: 'C',
         options: [
           {
             id: 'A',
-            text: 'Gestionar la distribución de manera aislada desde la Subgerencia sin convocar a otros niveles de gobierno para evitar que se conozcan las tensiones internas de la municipalidad.'
+            text: 'Solicitar al MIDIS que asuma directamente el reparto puerta a puerta reemplazando a la municipalidad provincial.',
           },
           {
             id: 'B',
-            text: 'Transferir unilateralmente las llaves del almacén al equipo territorial del MIDIS para que asuma la distribución directa en reemplazo de la municipalidad.'
+            text: 'Realizar la distribución en horario nocturno sin avisar a los comités de vigilancia para evitar interferencias políticas.',
           },
           {
             id: 'C',
-            text: 'Activar el comité de gestión y monitoreo conjunto con participación de los comités de vigilancia ciudadana, la Gerencia Regional de Desarrollo Social (GORE) y el equipo territorial del MIDIS para auditar el padrón de entrega, verificar las actas y blindar la trazabilidad del almacén.'
-          }
+            text: 'Activar el comité de gestión y monitoreo conjunto con participación de los comités de vigilancia ciudadana, el GORE y el equipo territorial del MIDIS para auditar el padrón de entrega y la trazabilidad del almacén.',
+          },
+          {
+            id: 'D',
+            text: 'Congelar la distribución de alimentos en toda la provincia hasta después del proceso electoral.',
+          },
         ],
-        correctOption: 'C',
         rubric: {
-          keywords: ['comité', 'vigilancia ciudadana', 'gore', 'midis', 'trazabilidad', 'almacén', 'articulación', 'padrón', 'control social'],
-          coreConcept: 'La cogestión transparente del PCA y ollas comunes requiere articulación multinivel (GL–GORE–MIDIS) combinada con control social de los comités de vigilancia ciudadana para garantizar trazabilidad desde el almacén hasta el usuario final.',
-          normativeRef: 'Ley N° 25307 / Normativa de gestión del PCA y Ollas Comunes MIDIS; Modelo de Integridad (D.S. N° 148-2024-PCM).',
-          socraticPrompt: '¿Qué rol preventivo cumple la incorporación de los comités de vigilancia ciudadana y del equipo territorial del MIDIS en el acto físico de verificación de inventarios y actas de entrega?'
-        }
-      }
-    ]
+          keywords: ['vigilancia', 'comité', 'trazabilidad', 'gore', 'midis', 'articulación'],
+          deepeningQuestion:
+            '¿Por qué la articulación simultánea entre control social (ollas comunes), Gobierno Regional y MIDIS genera un cerco preventivo más sólido que una acción aislada de gabinete?',
+          remediationQuestion:
+            'Para asegurar que los alimentos lleguen íntegros a sus destinatarios sin paralizar el servicio, ¿cómo debe integrarse la vigilancia ciudadana con la asistencia técnica del GORE y del MIDIS?',
+          normativeBasis:
+            'Modelos de Cogestión y Vigilancia Ciudadana del PCA / Ollas Comunes y Articulación Intergubernamental MIDIS–GORE–GL.',
+        },
+      },
+    ],
   },
   {
-    id: 'caso-3',
+    id: 'case-3',
     number: 3,
-    code: 'CASO 03',
     title: 'Filtración de denuncias, reserva de identidad y protección laboral en la articulación regional',
-    axis: 'Canales de Denuncia y Protección',
-    axisKey: 'denuncias',
-    level: 'Gobierno Regional (GORE / IAR) ↔ Unidades Territoriales de Cuna Más y Juntos (MIDIS)',
-    role: 'Gerente/a o Director/a Regional de Desarrollo e Inclusión Social (Copresidente/a de la IAR)',
-    maxPoints: 7.0,
-    narrative: [
-      'Durante una sesión descentralizada de la Instancia de Articulación Regional (IAR) destinada a monitorear el paquete integrado de Desarrollo Infantil Temprano (DIT), una especialista social del Gobierno Regional —que articula en campo con acompañantes técnicos de Cuna Más y gestores locales de Juntos— solicita hablar con usted en reserva y le entrega un sobre cerrado con audios y actas adulteradas.',
-      'La documentación evidencia que un coordinador territorial de un Programa Nacional del MIDIS y un jefe de equipo territorial del GORE exigen "cupos" económicos y condicionan la afiliación y permanencia de familias usuarias en ambos programas sociales.',
-      'La especialista solicita expresamente reserva de identidad y medidas de protección laboral, explicando que su contrato vence en diez (10) días calendario y que su jefe inmediato —precisamente el funcionario regional denunciado— ya le comunicó verbalmente que no renovará su vínculo.',
-      'Además, manifiesta temor fundado a represalias porque semanas atrás otro servidor presentó una alerta similar que fue tramitada erróneamente como una simple queja administrativa sin reserva de identidad, exponiendo su nombre ante los involucrados.',
-      'Al día siguiente de la sesión, un periodista local ingresa una solicitud de acceso a la información pública exigiendo copia de todas las denuncias recibidas durante la jornada de la IAR, así como los nombres de la denunciante y de los servidores involucrados.'
+    theme: 'Canales de denuncia, principio de reserva, medidas de protección al denunciante y articulación interinstitucional',
+    governmentLevel: 'Gobierno Regional (Gerencia/Dirección Regional de Desarrollo e Inclusión Social)',
+    articulation: 'Unidades Territoriales de Cuna Más y Juntos (MIDIS) en la Instancia de Articulación Regional (IAR)',
+    protagonistRole:
+      'Gerente/a o Director/a Regional de Desarrollo e Inclusión Social de un Gobierno Regional (GORE), copresidente/a de la IAR',
+    secondaryActors: [
+      'Especialista social regional (contratada bajo modalidad temporal con vínculo próximo a vencer)',
+      'Jefe/a de Equipo Territorial del GORE (denunciado y jefe inmediato de la especialista)',
+      'Jefes/as de las Unidades Territoriales de Cuna Más y Juntos del MIDIS',
+      'Jefe/a de la Oficina General de Recursos Humanos (OGRH)',
+      'Periodista local',
     ],
+    scenario: [
+      'Durante una sesión descentralizada de la Instancia de Articulación Regional (IAR) para monitorear el paquete integrado de Desarrollo Infantil Temprano (DIT), una especialista social del GORE que articula en campo con acompañantes técnicos de Cuna Más y gestores locales de Juntos te entrega en reserva un sobre cerrado con audios y actas adulteradas.',
+      'Las pruebas evidencian que un coordinador territorial de un Programa Nacional del MIDIS y un jefe de equipo del GORE cobran "cupos" y condicionan el acceso de familias usuarias. La denunciante solicita reserva de identidad y medida de protección laboral, pues su contrato vence en diez días y su jefe (el denunciado) ya anunció que no lo renovará; además, teme represalias porque semanas atrás otro servidor presentó una alerta que fue tramitada como una simple queja administrativa sin reserva. Al día siguiente, un periodista ingresa una solicitud de acceso a la información pública pidiendo copia de todas las denuncias recibidas en la sesión y los nombres de los involucrados.',
+    ],
+    criticalDilemma:
+      'Canalizar la denuncia cumpliendo estrictamente los plazos y reglas de confidencialidad entre el GORE y el MIDIS, activar medidas de protección laboral efectivas frente a represalias contractuales y denegar legalmente la divulgación de información reservada sin interrumpir el servicio a las familias de Cuna Más y Juntos.',
+    maxPoints: 7.0,
     questions: [
       {
-        id: 'q3_1',
-        code: '3.1',
+        id: 'q-3-1',
+        number: '3.1',
+        title: 'Diferenciación entre queja administrativa y denuncia de corrupción',
+        prompt:
+          '¿Por qué fue erróneo tramitar el caso previo como queja por defecto de tramitación y cuál es la vía correcta para la denuncia presentada hoy por la especialista?',
         points: 1.5,
-        axisKey: 'denuncias',
-        prompt: 'Según la Directiva N° 001-2022-MIDIS (Versión 02), ¿por qué fue erróneo tramitar la alerta previa como una queja administrativa y cuál es la calificación y vía correcta para la denuncia actual?',
+        correctOption: 'B',
         options: [
           {
             id: 'A',
-            text: 'Porque las quejas solo proceden contra proveedores externos; toda alerta de servidores debe derivarse primero al jefe inmediato para que realice un descargo preliminar.'
+            text: 'Porque toda comunicación de un trabajador debe tramitarse primero como reclamo en el Libro de Reclamaciones antes de pasar a Integridad.',
           },
           {
             id: 'B',
-            text: 'Porque la queja por defecto de tramitación busca corregir fallas procedimentales en un trámite, mientras que los hechos descritos contienen indicios de fundamento y materialidad de presuntos actos de corrupción, debiendo canalizarse como denuncia ante la Oficina de Integridad Institucional (OII) / Plataforma Digital Única de Denuncias del Ciudadano.'
+            text: 'Porque los hechos describen un presunto acto de corrupción con indicios razonables de fundamento y materialidad (cobro de cupos y abuso de función), que debe canalizarse con reserva mediante la Oficina de Integridad Institucional (OII) / Plataforma Digital Única de Denuncias del Ciudadano.',
           },
           {
             id: 'C',
-            text: 'Porque cualquier denuncia presentada en una sesión de la IAR debe hacerse pública en el acta de acuerdos antes de ser remitida a la Oficina de Integridad Institucional.'
-          }
+            text: 'Porque las quejas administrativas solo aplican a ciudadanos externos, mientras que los servidores públicos únicamente pueden denunciar ante la Fiscalía.',
+          },
+          {
+            id: 'D',
+            text: 'Porque el jefe inmediato denunciado debe emitir primero un informe de descargos antes de decidir si es queja o denuncia.',
+          },
         ],
-        correctOption: 'B',
         rubric: {
-          keywords: ['queja', 'denuncia', 'corrupción', 'fundamento', 'materialidad', 'oii', 'integridad', 'plataforma digital', 'directiva'],
-          coreConcept: 'La Directiva N° 001-2022-MIDIS (v.02) distingue entre reclamo/queja por defecto de tramitación (que va a Atención al Ciudadano) y denuncia por presuntos actos de corrupción con fundamento (indicios razonables) y materialidad (afectación al servicio y vínculo funcional), gestionada por la OII y la Plataforma Digital Única.',
-          normativeRef: 'Directiva N° 001-2022-MIDIS (Versión 02, aprobada por R.M. N° 157-2026-MIDIS) y Directiva N° 002-2023-PCM-SIP.',
-          socraticPrompt: '¿Qué consecuencias tiene sobre la protección del denunciante y el principio de reserva confundir una denuncia por corrupción con un reclamo o queja ordinaria de atención al ciudadano?'
-        }
+          keywords: ['corrupción', 'fundamento', 'materialidad', 'integridad', 'oii', 'queja', 'reserva'],
+          deepeningQuestion:
+            '¿Qué consecuencia operativa y de riesgo para el denunciante se produce cuando una denuncia de corrupción se deriva erróneamente como queja por defecto de tramitación?',
+          remediationQuestion:
+            'Según la Directiva N° 001-2022-MIDIS (Versión 02), ¿qué diferencia una queja por defecto de tramitación de una denuncia por presunto acto de corrupción con fundamento y materialidad?',
+          normativeBasis:
+            'Directiva N° 001-2022-MIDIS (Versión 02, R.M. N° 157-2026-MIDIS) y Directiva N° 002-2023-PCM-SIP.',
+        },
       },
       {
-        id: 'q3_2',
-        code: '3.2',
+        id: 'q-3-2',
+        number: '3.2',
+        title: 'Flujo de derivación, plazo (1 día hábil) y código cifrado',
+        prompt:
+          '¿Cuál es el procedimiento y plazo obligatorio para remitir la denuncia recibida en territorio hacia las instancias competentes del MIDIS/Programa Nacional y del GORE?',
         points: 1.5,
-        axisKey: 'denuncias',
-        prompt: '¿Cuál es el procedimiento y plazo perentorio obligatorio para remitir la denuncia recibida en territorio hacia las instancias de integridad competentes del Programa Nacional del MIDIS y del GORE?',
+        correctOption: 'A',
         options: [
           {
             id: 'A',
-            text: 'Remitirla en un plazo máximo de un (1) día hábil, mediante sobre cerrado confidencial o canal digital seguro, a la Oficina de Integridad Institucional (OII) del Programa Nacional/MIDIS y a la instancia de integridad/STPAD regional, asignando un código cifrado para resguardar la identidad.'
+            text: 'Remitirla en un plazo máximo de un (1) día hábil, en sobre cerrado confidencial o medio digital seguro, a la OII del Programa Nacional/MIDIS y a la instancia de integridad/STPAD regional, asignando un código cifrado para proteger la identidad.',
           },
           {
             id: 'B',
-            text: 'Conservar el sobre cerrado en la Dirección Regional durante diez (10) días hábiles mientras se realizan entrevistas de verificación con los testigos en campo.'
+            text: 'Conservar el expediente en la Gerencia Regional durante diez (10) días hábiles para realizar una investigación preliminar propia antes de informar al MIDIS.',
           },
           {
             id: 'C',
-            text: 'Remitir copia digital por correo institucional abierto a todas las unidades involucradas dentro de los cinco (5) días hábiles siguientes para garantizar la transparencia.'
-          }
+            text: 'Digitalizar los audios y enviarlos por correo institucional abierto con copia a todos los miembros de la IAR para garantizar transparencia.',
+          },
+          {
+            id: 'D',
+            text: 'Pedir a la especialista que vuelva a presentar su denuncia presencialmente en la Sede Central de Lima porque en territorio no se reciben sobres cerrados.',
+          },
         ],
-        correctOption: 'A',
         rubric: {
-          keywords: ['1 día hábil', 'un día hábil', 'sobre cerrado', 'código cifrado', 'reserva', 'oii', 'sispad', 'confidencial'],
-          coreConcept: 'Las autoridades o coordinadores en territorio deben remitir las denuncias en un plazo máximo de un (1) día hábil —en sobre cerrado confidencial o medio digital seguro— a la OII, asignando un código cifrado antes de la evaluación de requisitos (2 días hábiles) y el registro en el SISPAD.',
-          normativeRef: 'Directiva N° 001-2022-MIDIS (Versión 02, numerales 7.1 y 7.2) y D. Leg. N° 1327 (Art. 6: Principio de Reserva).',
-          socraticPrompt: '¿Por qué la asignación inmediata del código cifrado y el cumplimiento estricto del plazo de un (1) día hábil son determinantes antes de iniciar cualquier requerimiento de información en campo?'
-        }
+          keywords: ['1', 'un', 'día', 'hábil', 'código', 'cifrado', 'confidencial', 'sobre'],
+          deepeningQuestion:
+            '¿Por qué la asignación inmediata del código cifrado y la remisión en 1 día hábil son críticas antes de iniciar la revisión de requisitos (2 días hábiles) y el registro en el SISPAD?',
+          remediationQuestion:
+            'De acuerdo con la Directiva N° 001-2022-MIDIS (Versión 02) y el D. Leg. N° 1327, ¿en qué plazo máximo debe remitirse una denuncia recibida en territorio y mediante qué mecanismo se resguarda la identidad?',
+          normativeBasis:
+            'Directiva N° 001-2022-MIDIS (Versión 02) y Art. 8.1 del Decreto Legislativo N° 1327.',
+        },
       },
       {
-        id: 'q3_3',
-        code: '3.3',
+        id: 'q-3-3',
+        number: '3.3',
+        title: 'Protección laboral y reserva ante solicitud de prensa',
+        prompt:
+          '¿Qué medidas de protección laboral corresponden a la especialista y cómo debes responder a la solicitud de acceso a la información pública presentada por el periodista?',
         points: 2.0,
-        axisKey: 'denuncias',
-        prompt: 'Respecto a la situación contractual de la especialista denunciante y a la solicitud de acceso a la información pública presentada por el periodista, ¿qué decisiones corresponden legalmente?',
-        options: [
-          {
-            id: 'A',
-            text: 'Dejar que venza el contrato de la especialista para evitar conflictos con su jefe y entregar al periodista una copia testada con los nombres de los funcionarios denunciados.'
-          },
-          {
-            id: 'B',
-            text: 'Gestionar como medida de protección laboral la renovación de su relación contractual ante la anunciada no-renovación por represalia (además de traslado temporal o exoneración del denunciado si hay riesgo inminente) y denegar la solicitud del periodista por tratarse de información confidencial.'
-          },
-          {
-            id: 'C',
-            text: 'Suspender preventivamente a la especialista con goce de haber por seguridad y publicar un resumen del expediente en el portal de transparencia.'
-          }
-        ],
         correctOption: 'B',
-        rubric: {
-          keywords: ['renovación', 'contractual', 'represalia', 'medida de protección', 'denegar', 'confidencial', '17.3', 'reserva', 'd. leg. 1327'],
-          coreConcept: 'El Reglamento del D. Leg. N° 1327 prevé la renovación del contrato ante una anunciada no-renovación por represalia (así como traslado o licencia/exoneración del denunciado). Asimismo, toda información sobre denuncias y medidas de protección es estrictamente confidencial y está exceptuada de acceso público (Art. 17.3 TUO Ley N° 27806).',
-          normativeRef: 'D. Leg. N° 1327 (Art. 6 y Art. 9), D.S. N° 010-2017-JUS (Art. 6: Medidas de protección laboral) y Art. 17.3 del TUO de la Ley N° 27806.',
-          socraticPrompt: '¿Qué responsabilidad disciplinaria recaería sobre el funcionario que divulgue —incluso por negligencia o ante una solicitud de prensa— la identidad del denunciante o el contenido de la denuncia protegida?'
-        }
-      },
-      {
-        id: 'q3_4',
-        code: '3.4',
-        points: 2.0,
-        axisKey: 'denuncias',
-        prompt: '¿Cómo deben articular el/la Director/a Regional y los/as Jefes/as de las Unidades Territoriales de Cuna Más y Juntos para ejecutar las medidas de protección en los plazos normativos y sostener la atención a las familias?',
         options: [
           {
             id: 'A',
-            text: 'Requerir en 1 día hábil el informe de viabilidad operativa a OGRH (que debe emitirlo en máximo 3 días hábiles), activar la protección de oficio en la STPAD y redistribuir temporalmente las rutas de acompañamiento familiar en la IAR sin revelar el motivo al entorno operativo.'
+            text: 'Dejar que venza su contrato para evitar conflictos laborales y entregar al periodista una copia anonimizada de los audios por transparencia pública.',
           },
           {
             id: 'B',
-            text: 'Paralizar las visitas domiciliarias de Cuna Más y Juntos en el distrito involucrado durante 30 días mientras la STPAD concluye el procedimiento disciplinario.'
+            text: 'Gestionar la renovación de su relación contractual ante la anunciada no-renovación por represalia (y/o traslado temporal o exoneración del denunciado) y denegar la solicitud del periodista por tener carácter confidencial protegido por ley.',
           },
           {
             id: 'C',
-            text: 'Convocar a una asamblea con los comités de gestión de Cuna Más y Juntos para informarles quién presentó la denuncia y pedirles que vigilen al coordinador cuestionado.'
-          }
+            text: 'Trasladar a la denunciante a un puesto de menor nivel remunerativo para alejarla del jefe denunciado y confirmar al periodista solo los nombres de los investigados.',
+          },
+          {
+            id: 'D',
+            text: 'Entregar la información al periodista únicamente si firma un compromiso de no publicar el nombre de la denunciante.',
+          },
         ],
-        correctOption: 'A',
         rubric: {
-          keywords: ['ogrh', 'viabilidad operativa', '3 días hábiles', '1 día hábil', 'stpad', 'oficio', 'rutas', 'cuna más', 'juntos', 'continuidad'],
-          coreConcept: 'La articulación interna exige solicitar el informe de viabilidad operativa a OGRH en 1 día hábil (emisión en máximo 3 días hábiles) y asegurar la reserva de oficio en la STPAD, mientras en territorio se reorganizan las rutas de Cuna Más y Juntos sin exponer al denunciante ni interrumpir el servicio DIT.',
-          normativeRef: 'Directiva N° 001-2022-MIDIS (Versión 02: Articulación OII–OGRH–STPAD, plazos de 1 y 3 días hábiles) y D.S. N° 010-2017-JUS.',
-          socraticPrompt: '¿Cómo se equilibra la celeridad en la coordinación interna entre OII, OGRH y STPAD (plazos de 1 y 3 días hábiles) con el deber de no interrumpir las prestaciones de Desarrollo Infantil Temprano a las familias usuarias?'
-        }
-      }
-    ]
-  }
-];
-
-const DEMO_COHORT = [
-  {
-    id: 'demo-1',
-    name: 'Elena Quispe Huamán',
-    dni: '42891034',
-    email: 'equispe@regioncusco.gob.pe',
-    startedAt: '2026-07-15T09:10:00.000Z',
-    completedAt: '2026-07-15T09:42:00.000Z',
-    answers: {
-      q1_1: { selected: 'B', justification: 'Existe un conflicto de intereses real con la postulante por parentesco por afinidad con su cónyuge, lo que colisiona con el deber de imparcialidad.' },
-      q1_2: { selected: 'C', justification: 'Corresponde activar la excusación formal ante el Gerente de Desarrollo Social para tramitar su reemplazo, diferenciándola de la recusación de terceros.' },
-      q1_3: { selected: 'B', justification: 'Debe anotarse en el Registro de Visitas en Línea para dar trazabilidad y verificar la Declaración Jurada de Intereses.' },
-      q1_4: { selected: 'C', justification: 'Se comunica la abstención parcial al Coordinador Territorial de la UT del MIDIS y se continúa validando el resto del padrón.' },
-      q2_1: { selected: 'B', justification: 'Se configura proselitismo político con bienes en custodia del PCA y ventaja indebida por el ofrecimiento de viáticos del proveedor.' },
-      q2_2: { selected: 'C', justification: 'El deber de obediencia no ampara órdenes ilegales; debe negarse por escrito y comunicar al órgano de control.' },
-      q2_3: { selected: 'B', justification: 'Entregar información fidedigna y oportuna sobre stocks a la olla común, aplicar penalidades y denunciar el intento de soborno.' },
-      q2_4: { selected: 'C', justification: 'Activar el comité conjunto con vigilancia ciudadana, GORE y MIDIS para auditar el almacén y el padrón.' },
-      q3_1: { selected: 'B', justification: 'Tiene fundamento y materialidad de corrupción, por lo que debe tramitarse como denuncia ante la OII y no como queja.' },
-      q3_2: { selected: 'A', justification: 'Remitir en un plazo máximo de 1 día hábil en sobre cerrado confidencial asignando código cifrado para proteger su identidad.' },
-      q3_3: { selected: 'B', justification: 'Corresponde renovar el contrato como medida de protección laboral ante represalia y denegar acceso al periodista por confidencialidad.' },
-      q3_4: { selected: 'A', justification: 'Pedir informe de viabilidad operativa a OGRH en 1 día hábil para emisión en 3 días hábiles y redistribuir rutas con Cuna Más y Juntos.' }
-    }
+          keywords: ['renovación', 'contractual', 'denegar', 'confidencial', 'reserva', 'represalia', '1327'],
+          deepeningQuestion:
+            '¿Qué responsabilidad disciplinaria recae sobre el funcionario que divulga por negligencia o entrega por acceso a la información el contenido de una denuncia en trámite?',
+          remediationQuestion:
+            'Revisa el catálogo de medidas de protección laboral del Reglamento del D. Leg. N° 1327 (D.S. N° 010-2017-JUS) y el Art. 17.3 del TUO de la Ley de Transparencia: ¿procede entregar copias de denuncias a la prensa o permitir la no-renovación contractual por represalia?',
+          normativeBasis:
+            'D.S. N° 010-2017-JUS (Catálogo de medidas de protección laboral), Art. 6 del D. Leg. N° 1327 y Art. 17.3 del TUO de la Ley N° 27806.',
+        },
+      },
+      {
+        id: 'q-3-4',
+        number: '3.4',
+        title: 'Articulación interna y reorganización con Cuna Más y Juntos',
+        prompt:
+          '¿Cómo deben coordinar la Dirección Regional y las Unidades Territoriales de Cuna Más y Juntos para ejecutar la protección y sostener la atención de Desarrollo Infantil Temprano en campo?',
+        points: 2.0,
+        correctOption: 'A',
+        options: [
+          {
+            id: 'A',
+            text: 'Solicitar el informe de viabilidad operativa a OGRH (plazo de 1 día hábil para pedirlo y 3 días hábiles para emitirlo), activar la protección de oficio en la STPAD y redistribuir temporalmente las rutas de acompañamiento familiar entre los equipos de la IAR sin revelar el motivo al entorno operativo.',
+          },
+          {
+            id: 'B',
+            text: 'Convocar a una asamblea abierta con todos los acompañantes técnicos y gestores locales para explicarles quién denunció y por qué se reorganizan las rutas.',
+          },
+          {
+            id: 'C',
+            text: 'Suspender las visitas domiciliarias de Cuna Más y Juntos en el distrito involucrado durante los 30 días que dure la investigación disciplinaria.',
+          },
+          {
+            id: 'D',
+            text: 'Esperar a que la STPAD emita resolución de sanción firme antes de solicitar cualquier medida de viabilidad operativa a Recursos Humanos.',
+          },
+        ],
+        rubric: {
+          keywords: ['ogrh', 'viabilidad', '3', 'tres', 'días', 'stpad', 'rutas', 'oficio'],
+          deepeningQuestion:
+            '¿Por qué el cumplimiento estricto de los plazos internos (1 día hábil para solicitar viabilidad a OGRH, 3 días hábiles para su emisión y máximo 15 días hábiles para implementar la medida) es decisivo para evitar represalias consumadas?',
+          remediationQuestion:
+            'Considerando los plazos de la Directiva N° 001-2022-MIDIS (Versión 02) entre OII, OGRH y STPAD, ¿cómo se articula la protección urgente de la servidora sin revelar su identidad ni interrumpir el servicio a las familias de Cuna Más y Juntos?',
+          normativeBasis:
+            'Numeral 7.5 de la Directiva N° 001-2022-MIDIS (Plazos OII–OGRH–STPAD) y D.S. N° 010-2017-JUS (Protección de oficio).',
+        },
+      },
+    ],
   },
-  {
-    id: 'demo-2',
-    name: 'Carlos Mendoza Paredes',
-    dni: '40119283',
-    email: 'cmendoza@munihuamanga.gob.pe',
-    startedAt: '2026-07-15T10:05:00.000Z',
-    completedAt: '2026-07-15T10:39:00.000Z',
-    answers: {
-      q1_1: { selected: 'B', justification: 'Hay colisión directa entre el interés familiar por parentesco y la función pública de adjudicar el puesto.' },
-      q1_2: { selected: 'B', justification: 'Lo más práctico es que la postulante desista para no retrasar la campaña con la unidad territorial.' },
-      q1_3: { selected: 'B', justification: 'Registrar la visita del regidor en el Registro de Visitas en Línea y revisar la DJI.' },
-      q1_4: { selected: 'C', justification: 'Abstención parcial solo en el caso observado y continuidad del padrón con la UT del MIDIS.' },
-      q2_1: { selected: 'B', justification: 'Uso indebido de bienes en custodia para proselitismo y ventaja indebida del proveedor.' },
-      q2_2: { selected: 'C', justification: 'Rechazar la orden ilegal dejando constancia escrita y reportar al OCI.' },
-      q2_3: { selected: 'B', justification: 'Transparencia sobre stocks y criterios, mantener observaciones al proveedor y reportar el soborno.' },
-      q2_4: { selected: 'A', justification: 'Resolverlo internamente en la subgerencia para no generar alarma innecesaria.' },
-      q3_1: { selected: 'B', justification: 'Es denuncia por corrupción con indicios y materialidad ante la Oficina de Integridad Institucional.' },
-      q3_2: { selected: 'A', justification: 'Derivar en 1 día hábil con código cifrado y sobre cerrado.' },
-      q3_3: { selected: 'B', justification: 'Renovación contractual por protección laboral y reserva de identidad frente a la solicitud de prensa.' },
-      q3_4: { selected: 'B', justification: 'Suspender temporalmente las visitas mientras se investiga.' }
-    }
-  }
 ];
 
-/**
- * SERVICIO DE PERSISTENCIA Y LIMPIEZA SEGURA
- */
+// ============================================================================
+// SERVICIO DE PERSISTENCIA LOCAL
+// ============================================================================
+
 const storageService = {
-  purgeLegacy() {
+  cleanLegacy() {
     try {
-      STORAGE_KEYS.LEGACY.forEach((k) => localStorage.removeItem(k));
-    } catch (e) {
-      // Ignorar errores de almacenamiento restringido
+      LEGACY_KEYS.forEach((k) => localStorage.removeItem(k));
+    } catch {
+      // Ignorar errores de almacenamiento
     }
   },
-  loadCohort() {
-    this.purgeLegacy();
+  loadCohort(): ParticipantRecord[] {
     try {
+      this.cleanLegacy();
       const raw = localStorage.getItem(STORAGE_KEYS.COHORT);
       if (!raw) return [];
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed) ? parsed : [];
-    } catch (e) {
+    } catch {
       return [];
     }
   },
-  saveCohort(cohort) {
+  saveCohort(cohort: ParticipantRecord[]) {
     try {
       localStorage.setItem(STORAGE_KEYS.COHORT, JSON.stringify(cohort));
-    } catch (e) {
-      console.error('No se pudo guardar la cohorte en localStorage:', e);
+    } catch {
+      // Ignorar errores de cuota
     }
   },
-  loadActiveSessionId() {
+  loadActiveId(): string | null {
     try {
-      return localStorage.getItem(STORAGE_KEYS.SESSION) || null;
-    } catch (e) {
+      return localStorage.getItem(STORAGE_KEYS.ACTIVE_ID);
+    } catch {
       return null;
     }
   },
-  saveActiveSessionId(id) {
+  saveActiveId(id: string | null) {
     try {
       if (id) {
-        localStorage.setItem(STORAGE_KEYS.SESSION, id);
+        localStorage.setItem(STORAGE_KEYS.ACTIVE_ID, id);
       } else {
-        localStorage.removeItem(STORAGE_KEYS.SESSION);
+        localStorage.removeItem(STORAGE_KEYS.ACTIVE_ID);
       }
-    } catch (e) {
+    } catch {
       // Ignorar
     }
   },
-  loadConfig() {
+  loadConfig(): AppConfig {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.CONFIG);
-      if (!raw) return { ...DEFAULT_CONFIG };
+      if (!raw) return DEFAULT_CONFIG;
       return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
-    } catch (e) {
-      return { ...DEFAULT_CONFIG };
+    } catch {
+      return DEFAULT_CONFIG;
     }
   },
-  saveConfig(cfg) {
+  saveConfig(config: AppConfig): boolean {
     try {
-      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(cfg));
-    } catch (e) {
-      console.error('No se pudo guardar la configuración:', e);
+      localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(config));
+      return true;
+    } catch {
+      return false;
     }
-  }
+  },
 };
 
-/**
- * VALIDACIÓN DE IDENTIFICACIÓN DEL PARTICIPANTE
- */
-function validateParticipantForm({ name, dni, email, consent }) {
-  const errors = {};
-  if (!name || name.trim().length < 5) {
-    errors.name = 'Ingrese sus nombres y apellidos completos (mínimo 5 caracteres).';
-  }
-  if (!/^\d{8}$/.test((dni || '').trim())) {
-    errors.dni = 'El DNI debe contener exactamente 8 dígitos numéricos.';
-  }
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test((email || '').trim())) {
-    errors.email = 'Ingrese un correo electrónico válido.';
-  }
-  if (!consent) {
-    errors.consent = 'Debe aceptar el registro de avance y generación de reporte.';
-  }
-  return {
-    isValid: Object.keys(errors).length === 0,
-    errors,
-  };
-}
+// ============================================================================
+// COMPONENTE DE EMBLEMA OFICIAL MIDIS (SIN RECORTES + RESPALDO VECTORIAL)
+// ============================================================================
 
-/**
- * MOTOR DE RETROALIMENTACIÓN SOCRÁTICA Y COMPLEMENTARIA BASADA EN RÚBRICA
- */
-function analyzeJustificationSocratic(question, selectedOptionId, justificationText) {
-  const isCorrect = selectedOptionId === question.correctOption;
-  const textLower = (justificationText || '').toLowerCase();
-  const matchedKeywords = question.rubric.keywords.filter((kw) =>
-    textLower.includes(kw.toLowerCase())
-  );
-  const missingKeywords = question.rubric.keywords.filter(
-    (kw) => !textLower.includes(kw.toLowerCase())
-  );
-
-  let recognition = '';
-  if (matchedKeywords.length >= 3) {
-    recognition = `Su sustento incorpora con precisión conceptos técnicos clave de la rúbrica (${matchedKeywords
-      .slice(0, 4)
-      .join(', ')}), evidenciando claridad en el diagnóstico normativo.`;
-  } else if (matchedKeywords.length > 0) {
-    recognition = `Su argumentación identifica acertadamente elementos relevantes (${matchedKeywords.join(
-      ', '
-    )}) vinculados a la gestión ética del caso.`;
-  } else {
-    recognition = `Ha planteado una postura operativa frente al dilema; sin embargo, su sustento no explicita aún las categorías técnicas ni los plazos normativos exigidos por la directiva sectorial.`;
-  }
-
-  const complement = `${question.rubric.coreConcept} (Base normativa: ${question.rubric.normativeRef}).${
-    missingKeywords.length > 0
-      ? ` Para fortalecer su sustento técnico, integre criterios como: ${missingKeywords
-          .slice(0, 3)
-          .join(', ')}.`
-      : ''
-  }`;
-
-  const socraticQuestion = isCorrect
-    ? question.rubric.socraticPrompt
-    : `Usted eligió la alternativa ${selectedOptionId}. Contraste su argumento con el criterio normativo: ${question.rubric.socraticPrompt}`;
-
-  return {
-    isCorrect,
-    earnedPoints: isCorrect ? question.points : 0,
-    recognition,
-    complement,
-    socraticQuestion,
-    matchedCount: matchedKeywords.length,
-  };
-}
-
-/**
- * CÁLCULO EN TIEMPO REAL DEL PERFIL ADAPTATIVO Y PLAN DE ACCIÓN
- */
-function computeAdaptiveProfile(answers = {}) {
-  const allQuestions = CASES_DATA.flatMap((c) => c.questions);
-  let totalScore = 0;
-  let answeredCount = 0;
-
-  const axisStats = {
-    conflictos: { label: 'Conflictos de Intereses', earned: 0, max: 6.5, count: 0, total: 4 },
-    recursos: { label: 'Transparencia de Recursos', earned: 0, max: 6.5, count: 0, total: 4 },
-    denuncias: { label: 'Canales de Denuncia y Protección', earned: 0, max: 7.0, count: 0, total: 4 },
-  };
-
-  allQuestions.forEach((q) => {
-    const ans = answers[q.id];
-    if (ans && ans.selected) {
-      answeredCount += 1;
-      axisStats[q.axisKey].count += 1;
-      if (ans.selected === q.correctOption) {
-        totalScore += q.points;
-        axisStats[q.axisKey].earned += q.points;
-      }
-    }
-  });
-
-  totalScore = Math.round(totalScore * 10) / 10;
-
-  const axes = Object.entries(axisStats).map(([key, stat]) => {
-    const pct = stat.max > 0 ? Math.round((stat.earned / stat.max) * 100) : 0;
-    return {
-      key,
-      label: stat.label,
-      earned: Math.round(stat.earned * 10) / 10,
-      max: stat.max,
-      pct,
-      answered: stat.count,
-      total: stat.total,
-    };
-  });
-
-  let level = 'En Evaluación';
-  let badgeColor = 'bg-slate-100 text-slate-700 border-slate-300';
-  let summary = 'Complete las preguntas secuenciales para obtener su diagnóstico integral.';
-
-  if (answeredCount > 0) {
-    if (totalScore >= 17) {
-      level = 'Liderazgo Ético Estratégico';
-      badgeColor = 'bg-emerald-100 text-emerald-800 border-emerald-300';
-      summary =
-        'Demuestra dominio sobresaliente para diagnosticar riesgos de integridad, activar mecanismos preventivos y articular con el MIDIS sin detener la entrega de servicios.';
-    } else if (totalScore >= 14) {
-      level = 'Gestión Pública Competente';
-      badgeColor = 'bg-blue-100 text-blue-800 border-blue-300';
-      summary =
-        'Aplica criterios sólidos de probidad y transparencia territorial, con oportunidades puntuales de precisión en plazos y protocolos de protección.';
-    } else if (totalScore >= 10) {
-      level = 'Criterio Preventivo en Desarrollo';
-      badgeColor = 'bg-amber-100 text-amber-800 border-amber-300';
-      summary =
-        'Reconoce dilemas éticos básicos, pero requiere reforzar la activación oportuna de abstenciones, límites ante órdenes ilegales y plazos perentorios de denuncia.';
-    } else {
-      level = 'Alerta de Riesgo Operativo';
-      badgeColor = 'bg-rose-100 text-rose-800 border-rose-300';
-      summary =
-        'Presenta vulnerabilidades críticas en la gestión de conflictos de intereses, custodia de recursos o reserva de denuncias que pueden comprometer la continuidad del servicio.';
-    }
-  }
-
-  const recommendations = [];
-  const actionPlan = [];
-
-  axes.forEach((ax) => {
-    if (ax.key === 'conflictos' && ax.pct < 85) {
-      recommendations.push(
-        'Reforzar la diferenciación operativa entre excusación (deber propio de abstenerse ante el superior) y recusación, asegurando siempre el Registro de Visitas en Línea y la DJI.'
-      );
-      actionPlan.push({
-        eje: 'Conflictos de Intereses',
-        accion: 'Implementar bitácora de abstenciones parciales y verificación previa de DJI en comités de selección y focalización ULE.',
-        plazo: 'Inmediato (antes del siguiente corte SISFOH)',
-      });
-    }
-    if (ax.key === 'recursos' && ax.pct < 85) {
-      recommendations.push(
-        'Aplicar el deber de resistencia documentada frente a órdenes arbitrarias o proselitismo con bienes en custodia, activando comités de vigilancia ciudadana.'
-      );
-      actionPlan.push({
-        eje: 'Transparencia de Recursos',
-        accion: 'Publicar actas de stock de almacén y cronogramas de entrega PCA/Ollas Comunes con veeduría de GORE y equipo territorial MIDIS.',
-        plazo: 'Semanal / En cada entrega programada',
-      });
-    }
-    if (ax.key === 'denuncias' && ax.pct < 85) {
-      recommendations.push(
-        'Garantizar la derivación de denuncias de corrupción en máximo 1 día hábil con código cifrado a la OII y proteger el vínculo laboral sin divulgar identidad.'
-      );
-      actionPlan.push({
-        eje: 'Canales de Denuncia y Protección',
-        accion: 'Establecer protocolo territorial de sobre cerrado confidencial (1 día hábil) y coordinación expresa OII–OGRH–STPAD (3 días hábiles para viabilidad laboral).',
-        plazo: 'Permanente en espacios de articulación (IAR / IAL)',
-      });
-    }
-  });
-
-  if (actionPlan.length === 0 && answeredCount === 12) {
-    recommendations.push(
-      'Consolidar su rol como referente de integridad territorial replicando los protocolos de prevención y articulación multinivel con los equipos locales y regionales.'
-    );
-    actionPlan.push({
-      eje: 'Liderazgo Integral en Territorio',
-      accion: 'Conducir sesiones de réplica técnica sobre prevención de conflictos de intereses, transparencia activa y canales seguros de denuncia con equipos ULE, PCA e IAR.',
-      plazo: 'Próximos 30 días calendario',
-    });
-  }
-
-  return {
-    totalScore,
-    maxScore: 20.0,
-    answeredCount,
-    totalQuestions: 12,
-    progressPct: Math.round((answeredCount / 12) * 100),
-    axes,
-    level,
-    badgeColor,
-    summary,
-    recommendations,
-    actionPlan,
-  };
-}
-
-/**
- * COMPONENTE DE EMBLEMA OFICIAL MIDIS (DETECCIÓN AUTOMÁTICA + RESPALDO VECTORIAL SIN RECORTES)
- */
-function MidisLogoBadge({ customLogoUrl, onDoubleClick, className = '' }) {
+const MidisLogoBadge: React.FC<{
+  customUrl?: string;
+  onDoubleClick?: () => void;
+}> = ({ customUrl, onDoubleClick }) => {
   const candidates = useMemo(() => {
-    const list = [];
-    if (customLogoUrl && customLogoUrl.trim()) {
-      list.push(customLogoUrl.trim());
-    }
+    const list: string[] = [];
+    if (customUrl && customUrl.trim()) list.push(customUrl.trim());
     ['/logo-midis.png', '/MIDIS.png', '/MIDIS (1).png'].forEach((path) => {
       if (!list.includes(path)) list.push(path);
     });
     return list;
-  }, [customLogoUrl]);
+  }, [customUrl]);
 
-  const [candidateIdx, setCandidateIdx] = useState(0);
+  const [idx, setIdx] = useState(0);
   const [useFallbackSvg, setUseFallbackSvg] = useState(false);
 
   useEffect(() => {
-    setCandidateIdx(0);
+    setIdx(0);
     setUseFallbackSvg(false);
-  }, [customLogoUrl]);
+  }, [candidates]);
 
   const handleImgError = () => {
-    if (candidateIdx + 1 < candidates.length) {
-      setCandidateIdx((prev) => prev + 1);
+    if (idx + 1 < candidates.length) {
+      setIdx((prev) => prev + 1);
     } else {
       setUseFallbackSvg(true);
     }
   };
 
+  if (!useFallbackSvg && candidates[idx]) {
+    return (
+      <div
+        onDoubleClick={onDoubleClick}
+        className="flex items-center select-none cursor-pointer"
+        title="Ministerio de Desarrollo e Inclusión Social"
+      >
+        <img
+          src={candidates[idx]}
+          alt="Logo Oficial MIDIS - Perú"
+          onError={handleImgError}
+          className="h-10 sm:h-12 md:h-[52px] w-auto max-w-[290px] object-contain"
+        />
+      </div>
+    );
+  }
+
   return (
     <div
       onDoubleClick={onDoubleClick}
+      className="flex items-center select-none cursor-pointer"
       title="Ministerio de Desarrollo e Inclusión Social"
-      className={`select-none inline-flex items-center ${className}`}
     >
-      {!useFallbackSvg ? (
-        <img
-          src={candidates[candidateIdx]}
-          alt="Logo Oficial MIDIS"
-          onError={handleImgError}
-          className="h-11 sm:h-12 w-auto max-w-[260px] object-contain bg-white rounded px-1.5 py-1 shadow-sm"
+      <svg
+        viewBox="0 0 520 100"
+        className="h-10 sm:h-12 md:h-[52px] w-auto"
+        role="img"
+        aria-label="Logo Oficial Ministerio de Desarrollo e Inclusión Social"
+      >
+        {/* Bloque Escudo Nacional */}
+        <rect x="0" y="2" width="96" height="96" fill="#FFFFFF" stroke="#E2E8F0" strokeWidth="1" />
+        {/* Corona cívica */}
+        <ellipse cx="48" cy="18" rx="14" ry="7" fill="none" stroke="#15803D" strokeWidth="4" />
+        {/* Banderas laterales */}
+        <polygon points="18,28 32,24 32,76 16,70" fill="#D91023" />
+        <polygon points="22,28 28,26 28,74 21,71" fill="#FFFFFF" />
+        <polygon points="78,28 64,24 64,76 80,70" fill="#D91023" />
+        <polygon points="74,28 68,26 68,74 75,71" fill="#FFFFFF" />
+        {/* Blason central */}
+        <path
+          d="M28,28 H68 V56 C68,72 48,82 48,82 C48,82 28,72 28,56 Z"
+          fill="#FFFFFF"
+          stroke="#CA8A04"
+          strokeWidth="2.5"
         />
-      ) : (
-        <div className="inline-flex items-stretch h-11 sm:h-12 bg-white rounded overflow-hidden shadow-sm border border-slate-200">
-          {/* Bloque Escudo Nacional */}
-          <div className="flex items-center justify-center px-2 bg-white border-r border-slate-200">
-            <svg viewBox="0 0 64 64" className="w-8 h-8" aria-label="Escudo del Perú">
-              <circle cx="32" cy="32" r="29" fill="#f8fafc" stroke="#cbd5e1" strokeWidth="1.5" />
-              <path d="M14 18 C10 28, 10 38, 16 48 L22 44 C18 36, 18 28, 20 20 Z" fill="#dc2626" />
-              <path d="M50 18 C54 28, 54 38, 48 48 L42 44 C46 36, 46 28, 44 20 Z" fill="#dc2626" />
-              <ellipse cx="32" cy="13" rx="9" ry="4.5" fill="none" stroke="#15803d" strokeWidth="3.5" />
-              <path d="M21 20 H43 V35 C43 43, 32 49, 32 49 C32 49, 21 43, 21 35 Z" fill="#fef08a" stroke="#b45309" strokeWidth="1.8" />
-              <rect x="22.5" y="21.5" width="9" height="12" fill="#38bdf8" />
-              <rect x="32.5" y="21.5" width="9" height="12" fill="#ffffff" />
-              <path d="M22.5 34.5 H41.5 V36 C41.5 41.5, 32 47, 32 47 C32 47, 22.5 41.5, 22.5 36 Z" fill="#dc2626" />
-              <circle cx="37" cy="27.5" r="3.2" fill="#16a34a" />
-              <circle cx="27" cy="28" r="2.2" fill="#92400e" />
-              <path d="M26 39 Q32 43 38 39" stroke="#facc15" strokeWidth="2.5" fill="none" />
-            </svg>
-          </div>
-          {/* Bloque Rojo PERÚ */}
-          <div className="bg-[#D91023] text-white font-extrabold tracking-wider text-xs sm:text-sm px-2.5 flex items-center justify-center">
-            PERÚ
-          </div>
-          {/* Bloque Gris MIDIS */}
-          <div className="bg-[#575756] text-white px-2.5 py-1 flex flex-col justify-center leading-tight">
-            <span className="text-[10px] sm:text-[11px] font-semibold">Ministerio</span>
-            <span className="text-[10px] sm:text-[11px] font-semibold">de Desarrollo</span>
-            <span className="text-[10px] sm:text-[11px] font-semibold">e Inclusión Social</span>
-          </div>
-        </div>
-      )}
+        {/* Campo Vicuña */}
+        <rect x="30" y="30" width="18" height="22" fill="#38BDF8" />
+        <ellipse cx="39" cy="43" rx="4" ry="6" fill="#B45309" />
+        {/* Campo Árbol de la Quina */}
+        <rect x="48" y="30" width="18" height="22" fill="#FFFFFF" />
+        <circle cx="57" cy="39" r="6" fill="#16A34A" />
+        <rect x="56" y="43" width="2" height="7" fill="#78350F" />
+        {/* Campo Cornucopia */}
+        <path d="M30,52 H66 V56 C66,69 48,79 48,79 C48,79 30,69 30,56 Z" fill="#DC2626" />
+        <path d="M37,61 Q48,57 59,64 Q49,70 37,61 Z" fill="#FACC15" />
+
+        {/* Filete blanco */}
+        <rect x="96" y="2" width="5" height="96" fill="#FFFFFF" />
+
+        {/* Bloque Rojo PERÚ */}
+        <rect x="101" y="2" width="114" height="96" fill="#E30613" />
+        <text
+          x="158"
+          y="61"
+          textAnchor="middle"
+          fill="#FFFFFF"
+          fontFamily="Arial, Helvetica, sans-serif"
+          fontWeight="800"
+          fontSize="31"
+          letterSpacing="1"
+        >
+          PERÚ
+        </text>
+
+        {/* Filete blanco */}
+        <rect x="215" y="2" width="5" height="96" fill="#FFFFFF" />
+
+        {/* Bloque Gris Institucional MIDIS */}
+        <rect x="220" y="2" width="298" height="96" fill="#575756" />
+        <text
+          x="238"
+          y="44"
+          fill="#FFFFFF"
+          fontFamily="Arial, Helvetica, sans-serif"
+          fontWeight="600"
+          fontSize="21"
+        >
+          Ministerio de Desarrollo
+        </text>
+        <text
+          x="238"
+          y="72"
+          fill="#FFFFFF"
+          fontFamily="Arial, Helvetica, sans-serif"
+          fontWeight="600"
+          fontSize="21"
+        >
+          e Inclusión Social
+        </text>
+      </svg>
     </div>
   );
-}
+};
 
-/**
- * EXPORTACIÓN DE REPORTE INDIVIDUAL EN PDF (VENTANA DE IMPRESIÓN LIMPIA)
- */
-function exportParticipantPDF(participant, config) {
-  const profile = computeAdaptiveProfile(participant.answers);
-  const logoSrc = config.customLogoDataUrl || '/logo-midis.png';
+// ============================================================================
+// GENERACIÓN DE REPORTE INTEGRAL EN PDF (VENTANA IMPRIMIBLE)
+// ============================================================================
 
-  const questionsHtml = CASES_DATA.map((c) => {
-    const qItems = c.questions
+const generatePrintableReportHtml = (
+  participant: ParticipantRecord,
+  config: AppConfig
+): string => {
+  const answersList = Object.values(participant.answers);
+  const totalScore = answersList.reduce((acc, a) => acc + a.pointsEarned, 0);
+  const levelLabel =
+    totalScore >= 17
+      ? 'Sobresaliente — Liderazgo Ético y Articulación Efectiva'
+      : totalScore >= 14
+      ? 'Aprobado — Desempeño Competente en Integridad Pública'
+      : 'En Proceso — Requiere Refuerzo Normativo y Preventivo';
+
+  const caseBlocks = CASES_DATA.map((c) => {
+    const caseScore = c.questions.reduce(
+      (sum, q) => sum + (participant.answers[q.id]?.pointsEarned || 0),
+      0
+    );
+
+    const qRows = c.questions
       .map((q) => {
-        const ans = participant.answers?.[q.id];
-        if (!ans) {
-          return `
-            <div style="border:1px solid #e2e8f0; border-radius:6px; padding:10px; margin-bottom:8px; background:#f8fafc;">
-              <div style="font-weight:700; color:#475569;">Pregunta ${q.code} (${q.points.toFixed(1)} pts) — Pendiente</div>
-              <div style="font-size:12px; color:#64748b;">No respondida aún.</div>
-            </div>
-          `;
-        }
-        const feedback = analyzeJustificationSocratic(q, ans.selected, ans.justification);
-        const chosenOpt = q.options.find((o) => o.id === ans.selected);
+        const ans = participant.answers[q.id];
+        if (!ans) return '';
+        const chosenOpt = q.options.find((o) => o.id === ans.selectedOption);
         const correctOpt = q.options.find((o) => o.id === q.correctOption);
         return `
-          <div style="border:1px solid ${feedback.isCorrect ? '#86efac' : '#fecdd3'}; border-radius:6px; padding:10px; margin-bottom:10px; background:${feedback.isCorrect ? '#f0fdf4' : '#fff1f2'}; page-break-inside:avoid;">
-            <div style="display:flex; justify-content:space-between; font-weight:700; font-size:13px; color:#0f172a; margin-bottom:4px;">
-              <span>Pregunta ${q.code}: ${q.prompt}</span>
-              <span style="color:${feedback.isCorrect ? '#15803d' : '#be123c'}; white-space:nowrap; margin-left:8px;">
-                ${feedback.earnedPoints.toFixed(1)} / ${q.points.toFixed(1)} pts
+          <div style="border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin-bottom:10px;background:#ffffff;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <strong style="color:#0f172a;font-size:13px;">Pregunta ${q.number}: ${q.title}</strong>
+              <span style="padding:2px 8px;border-radius:12px;font-size:11px;font-weight:700;background:${
+                ans.isCorrect ? '#dcfce7' : '#fee2e2'
+              };color:${ans.isCorrect ? '#166534' : '#991b1b'};">
+                ${ans.isCorrect ? 'Correcta' : 'Incorrecta'} (${ans.pointsEarned.toFixed(1)} / ${q.points.toFixed(1)} pts)
               </span>
             </div>
-            <div style="font-size:12px; margin-bottom:4px;">
-              <strong>Alternativa elegida (${ans.selected}):</strong> ${chosenOpt ? chosenOpt.text : ans.selected}
-            </div>
+            <p style="margin:4px 0;font-size:12px;color:#334155;"><strong>Alternativa marcada (${ans.selectedOption}):</strong> ${
+          chosenOpt?.text || ''
+        }</p>
             ${
-              !feedback.isCorrect
-                ? `<div style="font-size:12px; color:#15803d; margin-bottom:4px;"><strong>Alternativa correcta (${q.correctOption}):</strong> ${correctOpt ? correctOpt.text : ''}</div>`
+              !ans.isCorrect
+                ? `<p style="margin:4px 0;font-size:12px;color:#166534;"><strong>Clave normativa (${q.correctOption}):</strong> ${
+                    correctOpt?.text || ''
+                  }</p>`
                 : ''
             }
-            <div style="font-size:12px; background:#ffffff; padding:6px 8px; border-radius:4px; border:1px solid #cbd5e1; margin-bottom:6px;">
+            <p style="margin:6px 0;font-size:12px;color:#1e293b;background:#f8fafc;padding:8px;border-left:3px solid #64748b;">
               <strong>Sustento del participante:</strong> "${ans.justification}"
-            </div>
-            <div style="font-size:11.5px; color:#1e293b; line-height:1.45;">
-              <div><strong>• Reconocimiento:</strong> ${feedback.recognition}</div>
-              <div><strong>• Complemento normativo:</strong> ${feedback.complement}</div>
-              <div><strong>• Reflexión socrática:</strong> <em>${feedback.socraticQuestion}</em></div>
-            </div>
+            </p>
+            <p style="margin:6px 0 0 0;font-size:11.5px;color:#1e3a8a;background:#eff6ff;padding:8px;border-radius:6px;">
+              <strong>Guía Socrática y Base Legal:</strong> ${ans.socraticFeedback} <em>(${q.rubric.normativeBasis})</em>
+            </p>
           </div>
         `;
       })
       .join('');
 
     return `
-      <div style="margin-top:16px;">
-        <h3 style="background:#1e293b; color:#ffffff; padding:7px 12px; border-radius:6px; font-size:14px; margin-bottom:8px;">
-          ${c.code}: ${c.title} (${c.axis})
-        </h3>
-        ${qItems}
+      <div style="margin-top:18px;">
+        <div style="background:#1e293b;color:#ffffff;padding:8px 12px;border-radius:6px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-weight:700;font-size:13.5px;">Caso ${c.number}: ${c.title}</span>
+          <span style="font-size:12px;font-weight:700;">Puntaje: ${caseScore.toFixed(1)} / ${c.maxPoints.toFixed(1)} pts</span>
+        </div>
+        <div style="margin-top:8px;">${qRows}</div>
       </div>
     `;
   }).join('');
 
-  const html = `
+  return `
     <!DOCTYPE html>
     <html lang="es">
     <head>
       <meta charset="UTF-8" />
-      <title>Reporte Individual - ${participant.name}</title>
+      <title>Reporte Integral - ${participant.fullName}</title>
       <style>
-        body { font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; margin: 24px; font-size: 13px; }
-        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #D91023; padding-bottom: 12px; margin-bottom: 16px; }
-        .brand { display: flex; align-items: center; gap: 10px; }
-        .badge-peru { background: #D91023; color: #fff; font-weight: 800; padding: 8px 10px; font-size: 14px; }
-        .badge-midis { background: #575756; color: #fff; font-weight: 600; padding: 6px 10px; font-size: 11px; line-height: 1.2; }
-        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; background: #f8fafc; padding: 12px; border-radius: 8px; border: 1px solid #cbd5e1; margin-bottom: 16px; }
-        .score-box { background: #0f172a; color: #fff; padding: 14px; border-radius: 8px; display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-        table { width: 100%; border-collapse: collapse; margin-bottom: 16px; }
-        th, td { border: 1px solid #cbd5e1; padding: 8px; text-align: left; font-size: 12px; }
-        th { background: #f1f5f9; font-weight: 700; }
-        @media print { body { margin: 12px; } }
+        body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 24px; line-height: 1.45; }
+        @media print {
+          body { margin: 12px; }
+          .no-print { display: none !important; }
+        }
       </style>
     </head>
     <body>
-      <div class="header">
-        <div class="brand">
-          <img src="${logoSrc}" alt="MIDIS" style="height:46px; object-fit:contain;" onerror="this.style.display='none'; document.getElementById('fallback-brand').style.display='flex';" />
-          <div id="fallback-brand" style="display:none; align-items:stretch;">
-            <div class="badge-peru">PERÚ</div>
-            <div class="badge-midis">Ministerio de Desarrollo<br/>e Inclusión Social</div>
-          </div>
-          <div>
-            <div style="font-size:15px; font-weight:800; color:#0f172a;">${config.workshopTitle}</div>
-            <div style="font-size:11.5px; color:#475569;">Reporte Individual de Desempeño y Plan de Acción Territorial</div>
-          </div>
-        </div>
-        <div style="text-align:right; font-size:11px; color:#64748b;">
-          Fecha: ${new Date().toLocaleDateString('es-PE')}<br/>
-          Simulador ${APP_VERSION}
-        </div>
+      <div class="no-print" style="background:#fef3c7;border:1px solid #f59e0b;padding:10px 14px;border-radius:8px;margin-bottom:16px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:13px;color:#92400e;"><strong>Vista previa de impresión:</strong> Selecciona "Guardar como PDF" en el cuadro de impresión.</span>
+        <button onclick="window.print()" style="background:#b91c1c;color:#fff;border:none;padding:8px 14px;border-radius:6px;font-weight:700;cursor:pointer;">Imprimir / Guardar PDF</button>
       </div>
 
-      <div class="grid">
-        <div><strong>Participante / Equipo:</strong> ${participant.name}</div>
-        <div><strong>DNI:</strong> ${participant.dni}</div>
-        <div><strong>Correo electrónico:</strong> ${participant.email}</div>
-        <div><strong>Avance registrado:</strong> ${profile.answeredCount} de 12 ítems (${profile.progressPct}%)</div>
-      </div>
-
-      <div class="score-box">
-        <div>
-          <div style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#94a3b8;">Nivel Adaptativo Alcanzado</div>
-          <div style="font-size:17px; font-weight:800; margin-top:2px;">${profile.level}</div>
-          <div style="font-size:12px; color:#cbd5e1; margin-top:4px; max-width:520px;">${profile.summary}</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:3px solid #dc2626;padding-bottom:12px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:10px;">
+          <div style="background:#e30613;color:#fff;font-weight:800;padding:10px 14px;font-size:18px;letter-spacing:1px;">PERÚ</div>
+          <div style="background:#575756;color:#fff;padding:8px 14px;font-size:13px;font-weight:600;">
+            Ministerio de Desarrollo<br/>e Inclusión Social
+          </div>
         </div>
         <div style="text-align:right;">
-          <div style="font-size:26px; font-weight:900; color:#38bdf8;">${profile.totalScore.toFixed(1)} / 20.0</div>
-          <div style="font-size:11px; color:#cbd5e1;">Puntaje Total</div>
+          <div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:700;">Reporte Integral de Desempeño</div>
+          <div style="font-size:14px;font-weight:700;color:#0f172a;">${config.workshopTitle}</div>
         </div>
       </div>
 
-      <h3 style="font-size:14px; margin-bottom:6px;">Desempeño por Eje Temático</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>Eje Temático</th>
-            <th>Ítems Respondidos</th>
-            <th>Puntaje Obtenido</th>
-            <th>Porcentaje de Logro</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${profile.axes
-            .map(
-              (ax) => `
-            <tr>
-              <td><strong>${ax.label}</strong></td>
-              <td>${ax.answered} / ${ax.total}</td>
-              <td>${ax.earned.toFixed(1)} / ${ax.max.toFixed(1)} pts</td>
-              <td>${ax.pct}%</td>
-            </tr>
-          `
-            )
-            .join('')}
-        </tbody>
+      <table style="width:100%;border-collapse:collapse;margin-bottom:16px;font-size:12.5px;">
+        <tr>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;width:22%;"><strong>Participante:</strong></td>
+          <td style="border:1px solid #cbd5e1;padding:8px;width:33%;">${participant.fullName}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;width:20%;"><strong>DNI:</strong></td>
+          <td style="border:1px solid #cbd5e1;padding:8px;width:25%;">${participant.dni}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;"><strong>Correo electrónico:</strong></td>
+          <td style="border:1px solid #cbd5e1;padding:8px;">${participant.email}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;"><strong>Calificación Final:</strong></td>
+          <td style="border:1px solid #cbd5e1;padding:8px;font-weight:700;color:#b91c1c;">${totalScore.toFixed(1)} / 20.0 pts</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;"><strong>Hora de ingreso:</strong></td>
+          <td style="border:1px solid #cbd5e1;padding:8px;">${formatTimestamp(participant.startedAt)}</td>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;"><strong>Hora de fin:</strong></td>
+          <td style="border:1px solid #cbd5e1;padding:8px;">${formatTimestamp(participant.completedAt)}</td>
+        </tr>
+        <tr>
+          <td style="border:1px solid #cbd5e1;padding:8px;background:#f8fafc;"><strong>Nivel alcanzado:</strong></td>
+          <td colspan="3" style="border:1px solid #cbd5e1;padding:8px;font-weight:700;">${levelLabel}</td>
+        </tr>
       </table>
 
-      <h3 style="font-size:14px; margin-bottom:6px;">Plan de Acción Territorial Recomendado</h3>
-      <table>
-        <thead>
-          <tr>
-            <th>Eje</th>
-            <th>Acción Prioritaria en Territorio</th>
-            <th>Horizonte</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${profile.actionPlan
-            .map(
-              (item) => `
-            <tr>
-              <td><strong>${item.eje}</strong></td>
-              <td>${item.accion}</td>
-              <td>${item.plazo}</td>
-            </tr>
-          `
-            )
-            .join('')}
-        </tbody>
-      </table>
+      ${caseBlocks}
 
-      <h2 style="font-size:15px; border-bottom:2px solid #cbd5e1; padding-bottom:4px; margin-top:20px;">
-        Detalle de Decisiones, Sustentos y Retroalimentación Socrática
-      </h2>
-      ${questionsHtml}
-
-      <script>
-        window.onload = function() { window.print(); };
-      </script>
+      <div style="margin-top:20px;padding-top:10px;border-top:1px solid #cbd5e1;font-size:11px;color:#64748b;text-align:center;">
+        Documento generado por el Simulador de Integridad en la Gestión Pública — ${config.institutionName}
+      </div>
     </body>
     </html>
   `;
+};
 
-  const win = window.open('', '_blank');
-  if (win) {
-    win.document.open();
-    win.document.write(html);
-    win.document.close();
-  } else {
-    alert('Por favor, permita las ventanas emergentes en su navegador para descargar el reporte PDF.');
-  }
-}
+// ============================================================================
+// COMPONENTE PRINCIPAL: APP
+// ============================================================================
 
-/**
- * EXPORTACIÓN MASIVA DE COHORTE EN CSV (UTF-8 BOM COMPATIBLE CON EXCEL)
- */
-function exportCohortCSV(cohort) {
-  const allQuestions = CASES_DATA.flatMap((c) => c.questions);
-  const headers = [
-    'Participante',
-    'DNI',
-    'Correo',
-    'Avance_Items',
-    'Puntaje_Total_20',
-    'Nivel_Adaptativo',
-    'Conflictos_Intereses_Pts',
-    'Transparencia_Recursos_Pts',
-    'Canales_Denuncia_Pts',
-    ...allQuestions.flatMap((q) => [`Resp_${q.code}`, `Pts_${q.code}`, `Sustento_${q.code}`]),
-  ];
-
-  const escapeCsv = (val) => {
-    const str = String(val ?? '').replace(/\r?\n|\r/g, ' ');
-    return `"${str.replace(/"/g, '""')}"`;
-  };
-
-  const rows = cohort.map((p) => {
-    const prof = computeAdaptiveProfile(p.answers);
-    const cPts = prof.axes.find((a) => a.key === 'conflictos')?.earned ?? 0;
-    const rPts = prof.axes.find((a) => a.key === 'recursos')?.earned ?? 0;
-    const dPts = prof.axes.find((a) => a.key === 'denuncias')?.earned ?? 0;
-
-    const qCols = allQuestions.flatMap((q) => {
-      const ans = p.answers?.[q.id];
-      if (!ans) return ['', '0', ''];
-      const pts = ans.selected === q.correctOption ? q.points : 0;
-      return [ans.selected, pts.toFixed(1), ans.justification];
-    });
-
-    return [
-      p.name,
-      p.dni,
-      p.email,
-      `${prof.answeredCount}/12`,
-      prof.totalScore.toFixed(1),
-      prof.level,
-      cPts.toFixed(1),
-      rPts.toFixed(1),
-      dPts.toFixed(1),
-      ...qCols,
-    ]
-      .map(escapeCsv)
-      .join(';');
-  });
-
-  const csvContent = '\uFEFF' + [headers.map(escapeCsv).join(';'), ...rows].join('\n');
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = `resultados_simulador_integridad_midis_${new Date().toISOString().slice(0, 10)}.csv`;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
-}
-
-/**
- * COMPONENTE PRINCIPAL DE LA APLICACIÓN
- */
 export default function App() {
-  const [config, setConfig] = useState(() => storageService.loadConfig());
-  const [cohort, setCohort] = useState(() => storageService.loadCohort());
-  const [activeSessionId, setActiveSessionId] = useState(() => storageService.loadActiveSessionId());
+  const [config, setConfig] = useState<AppConfig>(() => storageService.loadConfig());
+  const [cohort, setCohort] = useState<ParticipantRecord[]>(() => storageService.loadCohort());
+  const [activeParticipantId, setActiveParticipantId] = useState<string | null>(() =>
+    storageService.loadActiveId()
+  );
 
-  // Navegación principal: 'participant' | 'teacher'
-  const [viewMode, setViewMode] = useState('participant');
-
-  // Autenticación discreta de Vista Docente
-  const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState(false);
+  // Estados de navegación y modales
+  const [viewMode, setViewMode] = useState<'participant' | 'teacher'>('participant');
   const [showTeacherLoginModal, setShowTeacherLoginModal] = useState(false);
   const [loginUser, setLoginUser] = useState('');
   const [loginPass, setLoginPass] = useState('');
   const [loginError, setLoginError] = useState('');
 
-  // Pestaña activa en Vista Docente: 'cohort' | 'comparator' | 'settings'
-  const [teacherTab, setTeacherTab] = useState('cohort');
-  const [searchTerm, setSearchTerm] = useState('');
-  const [inspectParticipantId, setInspectParticipantId] = useState(null);
+  // Estados del formulario inicial de participante
+  const [fullName, setFullName] = useState('');
+  const [dni, setDni] = useState('');
+  const [email, setEmail] = useState('');
+  const [consent, setConsent] = useState(false);
+  const [formError, setFormError] = useState('');
 
-  // Estado de formulario de registro del participante
-  const [regName, setRegName] = useState('');
-  const [regDni, setRegDni] = useState('');
-  const [regEmail, setRegEmail] = useState('');
-  const [regConsent, setRegConsent] = useState(false);
-  const [regErrors, setRegErrors] = useState({});
+  // Estados del recorrido secuencial en el simulador
+  const [activeCaseIndex, setActiveCaseIndex] = useState(0);
+  const [activeQuestionIndex, setActiveQuestionIndex] = useState(0);
+  const [selectedOption, setSelectedOption] = useState<'A' | 'B' | 'C' | 'D' | null>(null);
+  const [justificationText, setJustificationText] = useState('');
+  const [questionError, setQuestionError] = useState('');
 
-  // Estado de navegación del simulador activo
-  const [activeCaseIdx, setActiveCaseIdx] = useState(0);
-  const [draftSelections, setDraftSelections] = useState({});
-  const [draftJustifications, setDraftJustifications] = useState({});
-  const [validationAlert, setValidationAlert] = useState('');
+  // Estados de Vista Docente
+  const [teacherTab, setTeacherTab] = useState<'cohort' | 'matrix' | 'settings'>('cohort');
+  const [selectedDetailParticipant, setSelectedDetailParticipant] =
+    useState<ParticipantRecord | null>(null);
+  const [draftConfig, setDraftConfig] = useState<AppConfig>(config);
+  const [configSavedNotice, setConfigSavedNotice] = useState('');
 
-  // Estado temporal en pestaña de configuración docente
-  const [cfgForm, setCfgForm] = useState(config);
-  const [cfgSavedMsg, setCfgSavedMsg] = useState('');
-
-  // Sincronización con localStorage
-  useEffect(() => {
-    storageService.saveCohort(cohort);
-  }, [cohort]);
-
-  useEffect(() => {
-    storageService.saveActiveSessionId(activeSessionId);
-  }, [activeSessionId]);
-
-  useEffect(() => {
-    storageService.saveConfig(config);
-    setCfgForm(config);
-  }, [config]);
+  const activeParticipant = useMemo(
+    () => cohort.find((p) => p.id === activeParticipantId) || null,
+    [cohort, activeParticipantId]
+  );
 
   // Atajo de teclado discreto Alt + D para abrir acceso docente
   useEffect(() => {
-    const handleKeyDown = (e) => {
+    const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && (e.key === 'd' || e.key === 'D')) {
         e.preventDefault();
-        if (isTeacherAuthenticated) {
-          setViewMode((prev) => (prev === 'teacher' ? 'participant' : 'teacher'));
+        if (viewMode === 'teacher') {
+          setViewMode('participant');
         } else {
           setLoginError('');
           setShowTeacherLoginModal(true);
@@ -1147,1285 +1098,1514 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isTeacherAuthenticated]);
+  }, [viewMode]);
 
-  const activeParticipant = useMemo(
-    () => cohort.find((p) => p.id === activeSessionId) || null,
-    [cohort, activeSessionId]
-  );
-
-  // Abrir acceso docente discreto
-  const triggerTeacherAccess = () => {
-    if (isTeacherAuthenticated) {
-      setViewMode('teacher');
-    } else {
-      setLoginUser('');
-      setLoginPass('');
-      setLoginError('');
-      setShowTeacherLoginModal(true);
-    }
-  };
-
-  const handleTeacherLoginSubmit = (e) => {
-    e.preventDefault();
-    if (
-      loginUser.trim() === (config.teacherUser || DEFAULT_CONFIG.teacherUser) &&
-      loginPass === (config.teacherPass || DEFAULT_CONFIG.teacherPass)
-    ) {
-      setIsTeacherAuthenticated(true);
-      setShowTeacherLoginModal(false);
-      setViewMode('teacher');
-      setLoginError('');
-    } else {
-      setLoginError('Usuario o clave incorrectos. Verifique las credenciales docentes.');
-    }
-  };
-
-  // Registro / inicio de sesión del participante
-  const handleStartSimulation = (e) => {
-    e.preventDefault();
-    const { isValid, errors } = validateParticipantForm({
-      name: regName,
-      dni: regDni,
-      email: regEmail,
-      consent: regConsent,
-    });
-    setRegErrors(errors);
-    if (!isValid) return;
-
-    const cleanDni = regDni.trim();
-    const existing = cohort.find((p) => p.dni === cleanDni);
-
-    if (existing) {
-      setActiveSessionId(existing.id);
-      // Posicionar en el primer caso con preguntas pendientes
-      const firstIncompleteCaseIdx = CASES_DATA.findIndex((c) =>
-        c.questions.some((q) => !existing.answers?.[q.id])
-      );
-      setActiveCaseIdx(firstIncompleteCaseIdx >= 0 ? firstIncompleteCaseIdx : 0);
-    } else {
-      const newParticipant = {
-        id: `part-${Date.now()}`,
-        name: regName.trim(),
-        dni: cleanDni,
-        email: regEmail.trim(),
-        startedAt: new Date().toISOString(),
-        completedAt: null,
-        answers: {},
-      };
-      setCohort((prev) => [newParticipant, ...prev]);
-      setActiveSessionId(newParticipant.id);
-      setActiveCaseIdx(0);
-    }
-  };
-
-  // Confirmar y calificar una pregunta (intento único + avance secuencial)
-  const handleConfirmAnswer = (question) => {
+  // Sincronizar posición secuencial cuando hay participante activo
+  useEffect(() => {
     if (!activeParticipant) return;
-    if (activeParticipant.answers?.[question.id]) return; // Intento único
+    let foundUnanswered = false;
+    for (let cIdx = 0; cIdx < CASES_DATA.length; cIdx++) {
+      const qs = CASES_DATA[cIdx].questions;
+      for (let qIdx = 0; qIdx < qs.length; qIdx++) {
+        if (!activeParticipant.answers[qs[qIdx].id]) {
+          setActiveCaseIndex(cIdx);
+          setActiveQuestionIndex(qIdx);
+          foundUnanswered = true;
+          break;
+        }
+      }
+      if (foundUnanswered) break;
+    }
+    if (!foundUnanswered) {
+      setActiveCaseIndex(CASES_DATA.length - 1);
+      setActiveQuestionIndex(CASES_DATA[CASES_DATA.length - 1].questions.length - 1);
+    }
+  }, [activeParticipant?.id]);
 
-    const selected = draftSelections[question.id];
-    const justification = (draftJustifications[question.id] || '').trim();
-    const wordCount = justification ? justification.split(/\s+/).filter(Boolean).length : 0;
+  // ==========================================================================
+  // MANEJADORES DE ACCIÓN DEL PARTICIPANTE
+  // ==========================================================================
 
-    if (!selected) {
-      setValidationAlert('Debe seleccionar una alternativa (A, B o C) antes de calificar.');
+  const handleStartSimulator = (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+
+    const cleanName = fullName.trim();
+    const cleanDni = dni.trim();
+    const cleanEmail = email.trim();
+
+    if (cleanName.length < 5) {
+      setFormError('Ingresa tus nombres y apellidos completos.');
       return;
     }
-    if (wordCount < config.minJustificationWords) {
-      setValidationAlert(
-        `Su sustento técnico es obligatorio y requiere al menos ${config.minJustificationWords} palabras (actual: ${wordCount}).`
+    if (!/^\d{8}$/.test(cleanDni)) {
+      setFormError('El DNI debe contener exactamente 8 dígitos numéricos.');
+      return;
+    }
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) {
+      setFormError('Ingresa un correo electrónico institucional o personal válido.');
+      return;
+    }
+    if (!consent) {
+      setFormError('Debes aceptar la declaración de participación y uso académico.');
+      return;
+    }
+
+    const nowIso = new Date().toISOString();
+    const newParticipant: ParticipantRecord = {
+      id: `part-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      fullName: cleanName,
+      dni: cleanDni,
+      email: cleanEmail,
+      startedAt: nowIso,
+      completedAt: null,
+      answers: {},
+    };
+
+    const updatedCohort = [newParticipant, ...cohort];
+    setCohort(updatedCohort);
+    storageService.saveCohort(updatedCohort);
+
+    setActiveParticipantId(newParticipant.id);
+    storageService.saveActiveId(newParticipant.id);
+
+    setActiveCaseIndex(0);
+    setActiveQuestionIndex(0);
+    setSelectedOption(null);
+    setJustificationText('');
+  };
+
+  const handleSubmitAnswer = () => {
+    if (!activeParticipant) return;
+    setQuestionError('');
+
+    const currentCase = CASES_DATA[activeCaseIndex];
+    const currentQuestion = currentCase.questions[activeQuestionIndex];
+
+    if (!selectedOption) {
+      setQuestionError('Selecciona una alternativa (A, B, C o D) antes de calificar.');
+      return;
+    }
+    const cleanJust = justificationText.trim();
+    const wordCount = cleanJust.split(/\s+/).filter(Boolean).length;
+    if (cleanJust.length < 25 || wordCount < 5) {
+      setQuestionError(
+        'Redacta un sustento técnico-normativo de al menos 5 palabras para habilitar la calificación.'
       );
       return;
     }
 
-    setValidationAlert('');
-    const updatedAnswers = {
-      ...(activeParticipant.answers || {}),
-      [question.id]: {
-        selected,
-        justification,
-        answeredAt: new Date().toISOString(),
-      },
+    const isCorrect = selectedOption === currentQuestion.correctOption;
+    const pointsEarned = isCorrect ? currentQuestion.points : 0;
+    const socraticFeedback = analyzeJustificationSocratic(
+      currentQuestion,
+      isCorrect,
+      cleanJust
+    );
+
+    const nowIso = new Date().toISOString();
+    const record: AnswerRecord = {
+      questionId: currentQuestion.id,
+      selectedOption,
+      justification: cleanJust,
+      isCorrect,
+      pointsEarned,
+      socraticFeedback,
+      answeredAt: nowIso,
+    };
+
+    const updatedAnswers: Record<string, AnswerRecord> = {
+      ...activeParticipant.answers,
+      [currentQuestion.id]: record,
     };
 
     const totalAnswered = Object.keys(updatedAnswers).length;
-    const isFinished = totalAnswered === 12;
+    const isFinished = totalAnswered >= 12;
+    const completedAt = isFinished
+      ? activeParticipant.completedAt || nowIso
+      : null;
 
-    setCohort((prev) =>
-      prev.map((p) =>
-        p.id === activeParticipant.id
-          ? {
-              ...p,
-              answers: updatedAnswers,
-              completedAt: isFinished ? new Date().toISOString() : p.completedAt,
-            }
-          : p
-      )
+    const updatedParticipant: ParticipantRecord = {
+      ...activeParticipant,
+      answers: updatedAnswers,
+      completedAt,
+    };
+
+    const updatedCohort = cohort.map((p) =>
+      p.id === updatedParticipant.id ? updatedParticipant : p
     );
+    setCohort(updatedCohort);
+    storageService.saveCohort(updatedCohort);
+    setQuestionError('');
   };
 
-  // Reiniciar plataforma completamente a 0 registros (sin recargar demo)
+  const handleNextStep = () => {
+    setSelectedOption(null);
+    setJustificationText('');
+    setQuestionError('');
+
+    const currentCase = CASES_DATA[activeCaseIndex];
+    if (activeQuestionIndex + 1 < currentCase.questions.length) {
+      setActiveQuestionIndex((prev) => prev + 1);
+    } else if (activeCaseIndex + 1 < CASES_DATA.length) {
+      setActiveCaseIndex((prev) => prev + 1);
+      setActiveQuestionIndex(0);
+    }
+  };
+
+  const handleExitParticipantSession = () => {
+    setActiveParticipantId(null);
+    storageService.saveActiveId(null);
+    setFullName('');
+    setDni('');
+    setEmail('');
+    setConsent(false);
+    setSelectedOption(null);
+    setJustificationText('');
+    setActiveCaseIndex(0);
+    setActiveQuestionIndex(0);
+  };
+
+  const handleOpenPrintablePdf = (participant: ParticipantRecord) => {
+    const html = generatePrintableReportHtml(participant, config);
+    const win = window.open('', '_blank', 'width=920,height=780');
+    if (win) {
+      win.document.open();
+      win.document.write(html);
+      win.document.close();
+    }
+  };
+
+  // ==========================================================================
+  // MANEJADORES DE VISTA DOCENTE Y EXPORTACIÓN EXCEL (CSV)
+  // ==========================================================================
+
+  const handleTeacherLogin = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (
+      loginUser.trim() === config.teacherUsername &&
+      loginPass === config.teacherPassword
+    ) {
+      setShowTeacherLoginModal(false);
+      setLoginUser('');
+      setLoginPass('');
+      setLoginError('');
+      setDraftConfig(config);
+      setViewMode('teacher');
+    } else {
+      setLoginError('Usuario o clave docente incorrectos.');
+    }
+  };
+
   const handleResetPlatform = () => {
     const confirmed = window.confirm(
-      '¿Está seguro de eliminar TODOS los registros de participantes y dejar la plataforma en 0? Esta acción no se puede deshacer.'
+      '¿Confirmas reiniciar la plataforma? Se eliminarán todos los registros de participantes almacenados en este navegador y la tabla quedará en 0.'
     );
     if (!confirmed) return;
 
-    storageService.purgeLegacy();
+    storageService.cleanLegacy();
     localStorage.removeItem(STORAGE_KEYS.COHORT);
-    localStorage.removeItem(STORAGE_KEYS.SESSION);
+    localStorage.removeItem(STORAGE_KEYS.ACTIVE_ID);
     setCohort([]);
-    setActiveSessionId(null);
-    setInspectParticipantId(null);
-    setDraftSelections({});
-    setDraftJustifications({});
-    setActiveCaseIdx(0);
+    setActiveParticipantId(null);
+    setSelectedDetailParticipant(null);
   };
 
-  // Cargar explícitamente los 2 participantes de demostración
-  const handleLoadDemo = () => {
-    setCohort(DEMO_COHORT);
+  const handleLoadDemoExamples = () => {
+    const now = Date.now();
+    const demo1: ParticipantRecord = {
+      id: `demo-1-${now}`,
+      fullName: 'Elena Quispe Huamán (Ejemplo)',
+      dni: '42891034',
+      email: 'equispe.ejemplo@gob.pe',
+      startedAt: new Date(now - 18 * 60 * 1000).toISOString(),
+      completedAt: new Date(now - 3 * 60 * 1000).toISOString(),
+      answers: CASES_DATA.reduce((acc, c) => {
+        c.questions.forEach((q) => {
+          acc[q.id] = {
+            questionId: q.id,
+            selectedOption: q.correctOption,
+            justification:
+              'Sustento técnico de demostración basado en la Ley N° 27815 y la Directiva N° 001-2022-MIDIS.',
+            isCorrect: true,
+            pointsEarned: q.points,
+            socraticFeedback: analyzeJustificationSocratic(
+              q,
+              true,
+              'Sustento técnico de demostración basado en la Ley N° 27815 y la Directiva N° 001-2022-MIDIS.'
+            ),
+            answeredAt: new Date(now - 3 * 60 * 1000).toISOString(),
+          };
+        });
+        return acc;
+      }, {} as Record<string, AnswerRecord>),
+    };
+
+    const demo2: ParticipantRecord = {
+      id: `demo-2-${now}`,
+      fullName: 'Carlos Mendoza Paredes (Ejemplo)',
+      dni: '40112233',
+      email: 'cmendoza.ejemplo@gob.pe',
+      startedAt: new Date(now - 9 * 60 * 1000).toISOString(),
+      completedAt: null,
+      answers: {
+        'q-1-1': {
+          questionId: 'q-1-1',
+          selectedOption: 'B',
+          justification:
+            'Se configura conflicto de intereses real por el parentesco con la postulante y requiere abstención oportuna.',
+          isCorrect: true,
+          pointsEarned: 1.5,
+          socraticFeedback: analyzeJustificationSocratic(
+            CASES_DATA[0].questions[0],
+            true,
+            'Se configura conflicto de intereses real por el parentesco con la postulante y requiere abstención oportuna.'
+          ),
+          answeredAt: new Date(now - 6 * 60 * 1000).toISOString(),
+        },
+      },
+    };
+
+    const updated = [demo1, demo2, ...cohort];
+    setCohort(updated);
+    storageService.saveCohort(updated);
   };
 
-  // Subir logotipo personalizado desde el panel docente
-  const handleLogoFileUpload = (e) => {
+  const exportCohortCSV = () => {
+    const headers = [
+      'Participante',
+      'DNI',
+      'Correo Electrónico',
+      'Hora de ingreso',
+      'Hora de fin',
+      'Preguntas Respondidas',
+      'Estado',
+      'Puntaje Caso 1 (6.5)',
+      'Puntaje Caso 2 (6.5)',
+      'Puntaje Caso 3 (7.0)',
+      'Puntaje Total (20.0)',
+      'Nivel de Desempeño',
+    ];
+
+    const escapeCsv = (val: string | number) => {
+      const str = String(val ?? '');
+      if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+        return `"${str.replace(/"/g, '""')}"`;
+      }
+      return str;
+    };
+
+    const rows = cohort.map((p) => {
+      const answeredCount = Object.keys(p.answers).length;
+      const c1 = CASES_DATA[0].questions.reduce(
+        (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+        0
+      );
+      const c2 = CASES_DATA[1].questions.reduce(
+        (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+        0
+      );
+      const c3 = CASES_DATA[2].questions.reduce(
+        (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+        0
+      );
+      const total = c1 + c2 + c3;
+      const level =
+        answeredCount < 12
+          ? 'En progreso'
+          : total >= 17
+          ? 'Sobresaliente'
+          : total >= 14
+          ? 'Aprobado'
+          : 'En proceso';
+
+      return [
+        p.fullName,
+        p.dni,
+        p.email,
+        formatTimestamp(p.startedAt),
+        p.completedAt ? formatTimestamp(p.completedAt) : 'En curso',
+        `${answeredCount} / 12`,
+        answeredCount >= 12 ? 'Finalizado' : 'En curso',
+        c1.toFixed(1),
+        c2.toFixed(1),
+        c3.toFixed(1),
+        total.toFixed(1),
+        level,
+      ]
+        .map(escapeCsv)
+        .join(',');
+    });
+
+    const csvContent = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    const dateStamp = new Date().toISOString().slice(0, 10);
+    link.setAttribute('download', `Resultados_Taller_Integridad_MIDIS_${dateStamp}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = (ev) => {
+    reader.onload = () => {
       const img = new Image();
       img.onload = () => {
-        const canvas = document.createElement('canvas');
         const maxH = 120;
         const scale = img.height > maxH ? maxH / img.height : 1;
-        canvas.width = img.width * scale;
-        canvas.height = img.height * scale;
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
         const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-        const dataUrl = canvas.toDataURL('image/png');
-        setCfgForm((prev) => ({ ...prev, customLogoDataUrl: dataUrl }));
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const optimizedDataUrl = canvas.toDataURL('image/png');
+          setDraftConfig((prev) => ({ ...prev, customLogoDataUrl: optimizedDataUrl }));
+        }
       };
-      img.src = ev.target.result;
+      if (typeof reader.result === 'string') {
+        img.src = reader.result;
+      }
     };
     reader.readAsDataURL(file);
   };
 
-  const handleSaveConfig = (e) => {
+  const handleSaveConfig = (e: React.FormEvent) => {
     e.preventDefault();
-    setConfig(cfgForm);
-    setCfgSavedMsg('Configuración institucional y logotipo guardados correctamente.');
-    setTimeout(() => setCfgSavedMsg(''), 3500);
+    const ok = storageService.saveConfig(draftConfig);
+    setConfig(draftConfig);
+    setConfigSavedNotice(
+      ok
+        ? 'Configuración guardada correctamente en este navegador.'
+        : 'Configuración aplicada en la sesión actual.'
+    );
+    setTimeout(() => setConfigSavedNotice(''), 4000);
   };
 
-  // Calcular desbloqueo secuencial de casos y preguntas para el participante activo
-  const participantProfile = useMemo(
-    () => (activeParticipant ? computeAdaptiveProfile(activeParticipant.answers) : null),
-    [activeParticipant]
-  );
+  // ==========================================================================
+  // CÁLCULOS DERIVADOS PARA PARTICIPANTE ACTIVO Y COHORTE
+  // ==========================================================================
 
-  const unlockedCaseIndex = useMemo(() => {
-    if (!activeParticipant) return 0;
-    const ans = activeParticipant.answers || {};
-    const c1Done = CASES_DATA[0].questions.every((q) => Boolean(ans[q.id]));
-    if (!c1Done) return 0;
-    const c2Done = CASES_DATA[1].questions.every((q) => Boolean(ans[q.id]));
-    if (!c2Done) return 1;
-    return 2;
+  const participantStats = useMemo(() => {
+    if (!activeParticipant) return null;
+    const answers = Object.values(activeParticipant.answers);
+    const totalScore = answers.reduce((acc, a) => acc + a.pointsEarned, 0);
+    const answeredCount = answers.length;
+    const isCompleted = answeredCount >= 12;
+    return { totalScore, answeredCount, isCompleted };
   }, [activeParticipant]);
 
-  // Métricas globales de cohorte para Vista Docente
-  const cohortMetrics = useMemo(() => {
+  const cohortStats = useMemo(() => {
     const total = cohort.length;
-    if (total === 0) {
-      return { total: 0, completed: 0, avgScore: 0, passRate: 0 };
-    }
-    let completed = 0;
-    let sumScore = 0;
-    let passed = 0;
-    cohort.forEach((p) => {
-      const prof = computeAdaptiveProfile(p.answers);
-      if (prof.answeredCount === 12) completed += 1;
-      sumScore += prof.totalScore;
-      if (prof.totalScore >= (config.passingScore || 14)) passed += 1;
-    });
+    const completed = cohort.filter((p) => Object.keys(p.answers).length >= 12);
+    const avgScore =
+      completed.length > 0
+        ? completed.reduce(
+            (sum, p) =>
+              sum +
+              Object.values(p.answers).reduce((s, a) => s + a.pointsEarned, 0),
+            0
+          ) / completed.length
+        : 0;
+    const passed = completed.filter(
+      (p) =>
+        Object.values(p.answers).reduce((s, a) => s + a.pointsEarned, 0) >= 14
+    ).length;
     return {
       total,
-      completed,
-      avgScore: Math.round((sumScore / total) * 10) / 10,
-      passRate: Math.round((passed / total) * 100),
+      completedCount: completed.length,
+      avgScore,
+      passRate: completed.length > 0 ? Math.round((passed / completed.length) * 100) : 0,
     };
-  }, [cohort, config.passingScore]);
+  }, [cohort]);
 
-  const filteredCohort = useMemo(() => {
-    const q = searchTerm.trim().toLowerCase();
-    if (!q) return cohort;
-    return cohort.filter(
-      (p) =>
-        p.name.toLowerCase().includes(q) ||
-        p.dni.includes(q) ||
-        p.email.toLowerCase().includes(q)
-    );
-  }, [cohort, searchTerm]);
-
-  const inspectedParticipant = useMemo(
-    () => cohort.find((p) => p.id === inspectParticipantId) || null,
-    [cohort, inspectParticipantId]
-  );
+  // ==========================================================================
+  // RENDERIZADO DE INTERFAZ
+  // ==========================================================================
 
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans">
+    <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
       {/* CABECERA INSTITUCIONAL */}
-      <header className="bg-slate-900 text-white border-b-4 border-[#D91023] shadow-md sticky top-0 z-30">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-3.5">
+      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-3 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
             <MidisLogoBadge
-              customLogoUrl={config.customLogoDataUrl}
-              onDoubleClick={triggerTeacherAccess}
+              customUrl={config.customLogoDataUrl}
+              onDoubleClick={() => {
+                if (viewMode === 'teacher') {
+                  setViewMode('participant');
+                } else {
+                  setLoginError('');
+                  setShowTeacherLoginModal(true);
+                }
+              }}
             />
-            <div className="border-l border-slate-700 pl-3.5">
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-bold uppercase tracking-wider text-red-400">
-                  Oficina de Integridad Institucional
-                </span>
-                {viewMode === 'teacher' && (
-                  <span className="text-[10px] font-bold bg-emerald-600 text-white px-2 py-0.5 rounded-full">
-                    {APP_VERSION}
-                  </span>
-                )}
-              </div>
-              <h1 className="text-sm sm:text-base font-bold leading-snug text-white">
+            <div className="hidden md:block border-l border-slate-200 pl-4">
+              <span className="text-[11px] font-bold uppercase tracking-wider text-red-700 block">
+                Taller Virtual de Integridad Pública
+              </span>
+              <h1 className="text-sm font-bold text-slate-800 leading-tight">
                 {config.workshopTitle}
               </h1>
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {viewMode === 'teacher' && (
-              <button
-                type="button"
-                onClick={() => setViewMode('participant')}
-                className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-100 border border-slate-600 transition"
-              >
-                ← Volver a Vista Participante
-              </button>
-            )}
-
-            {viewMode === 'participant' && activeParticipant && (
-              <div className="flex items-center gap-2.5 bg-slate-800/90 border border-slate-700 px-3 py-1.5 rounded-lg">
+          <div className="flex items-center gap-3">
+            {viewMode === 'teacher' ? (
+              <div className="flex items-center gap-2">
+                <span className="px-2.5 py-1 rounded-full bg-slate-800 text-white text-xs font-bold">
+                  Vista Docente · v3.1
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setViewMode('participant')}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold transition"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  Volver a Vista Participante
+                </button>
+              </div>
+            ) : activeParticipant && participantStats ? (
+              <div className="flex items-center gap-3">
                 <div className="text-right hidden sm:block">
-                  <div className="text-xs font-semibold text-white">{activeParticipant.name}</div>
-                  <div className="text-[11px] text-slate-400">DNI: {activeParticipant.dni}</div>
+                  <div className="text-xs font-bold text-slate-800">
+                    {activeParticipant.fullName}
+                  </div>
+                  <div className="text-[11px] text-slate-500">
+                    DNI: {activeParticipant.dni} · Progreso:{' '}
+                    <strong>{participantStats.answeredCount}/12</strong>
+                  </div>
+                </div>
+                <div className="px-3 py-1.5 rounded-lg bg-red-50 border border-red-200 text-red-800 text-xs font-extrabold">
+                  {participantStats.totalScore.toFixed(1)} / 20 pts
                 </div>
                 <button
                   type="button"
-                  onClick={() => {
-                    setActiveSessionId(null);
-                    setValidationAlert('');
-                  }}
-                  className="text-xs px-2.5 py-1 rounded bg-slate-700 hover:bg-slate-600 text-slate-200 transition"
+                  onClick={handleExitParticipantSession}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:bg-slate-100 text-slate-600 text-xs font-medium transition"
+                  title="Cerrar sesión actual"
                 >
-                  Cambiar usuario
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span className="hidden sm:inline">Salir</span>
                 </button>
               </div>
+            ) : (
+              <span className="text-xs font-medium text-slate-500 bg-slate-100 px-3 py-1 rounded-full">
+                Simulador Interactivo de Casos
+              </span>
             )}
           </div>
         </div>
       </header>
 
       {/* CONTENIDO PRINCIPAL */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
-        {viewMode === 'participant' ? (
-          !activeParticipant ? (
-            /* PANTALLA DE BIENVENIDA Y REGISTRO DEL PARTICIPANTE */
-            <div className="max-w-4xl mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              <div className="lg:col-span-7 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 sm:p-8">
-                <span className="inline-block text-xs font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-red-50 text-[#D91023] border border-red-200 mb-3">
-                  Taller Virtual de Integridad Pública
-                </span>
-                <h2 className="text-2xl font-extrabold text-slate-900 leading-tight mb-3">
-                  Simulador de Casos Prácticos en Servicios del MIDIS y sus PPSS
-                </h2>
-                <p className="text-sm text-slate-600 leading-relaxed mb-5">
-                  Analice tres situaciones críticas de articulación territorial entre Gobiernos Locales,
-                  Gobiernos Regionales y Programas Sociales del MIDIS (Pensión 65, Contigo, PCA/Ollas Comunes,
-                  Cuna Más y Juntos), diagnosticando riesgos de <strong>conflictos de intereses</strong>,{' '}
-                  <strong>transparencia de recursos</strong> y <strong>canales de denuncia</strong>.
-                </p>
-
-                <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
-                  <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">
-                    Reglas de participación y evaluación (20 puntos)
-                  </h3>
-                  <div className="flex items-start gap-3 text-sm text-slate-700">
-                    <span className="w-6 h-6 rounded-full bg-[#D91023] text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      1
-                    </span>
-                    <p>
-                      <strong>Intento único y avance secuencial:</strong> El simulador consta de 3 casos y 12
-                      preguntas (20 puntos en total). Cada pregunta se desbloquea de manera progresiva tras
-                      confirmar la anterior, requiere un <strong>sustento técnico obligatorio</strong> y admite
-                      un único intento puntuable.
-                    </p>
-                  </div>
-                  <div className="flex items-start gap-3 text-sm text-slate-700">
-                    <span className="w-6 h-6 rounded-full bg-slate-800 text-white text-xs font-bold flex items-center justify-center shrink-0 mt-0.5">
-                      2
-                    </span>
-                    <p>
-                      <strong>Retroalimentación socrática y reporte PDF:</strong> Al responder cada ítem
-                      recibirá su puntaje inmediato junto con el análisis de su argumento frente a la rúbrica
-                      normativa. Al finalizar, podrá descargar su reporte integral y plan de acción en PDF.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* FORMULARIO DE IDENTIFICACIÓN SIMPLIFICADO */}
-              <div className="lg:col-span-5 bg-white rounded-2xl shadow-sm border border-slate-200 p-6 sm:p-7">
-                <h3 className="text-lg font-bold text-slate-900 mb-1">
-                  Identificación del Participante
-                </h3>
-                <p className="text-xs text-slate-500 mb-5">
-                  Complete sus datos para registrar su avance y emitir su reporte individual.
-                </p>
-
-                <form onSubmit={handleStartSimulation} className="space-y-4" noValidate>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Nombres y Apellidos completos *
-                    </label>
-                    <input
-                      type="text"
-                      value={regName}
-                      onChange={(e) => setRegName(e.target.value)}
-                      placeholder="Ej. María Fernanda Torres Salazar"
-                      className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#D91023]"
-                    />
-                    {regErrors.name && (
-                      <p className="text-xs text-rose-600 mt-1">{regErrors.name}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Número de DNI (8 dígitos) *
-                    </label>
-                    <input
-                      type="text"
-                      maxLength={8}
-                      value={regDni}
-                      onChange={(e) => setRegDni(e.target.value.replace(/\D/g, ''))}
-                      placeholder="Ej. 45678912"
-                      className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#D91023]"
-                    />
-                    {regErrors.dni && (
-                      <p className="text-xs text-rose-600 mt-1">{regErrors.dni}</p>
-                    )}
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Correo electrónico *
-                    </label>
-                    <input
-                      type="email"
-                      value={regEmail}
-                      onChange={(e) => setRegEmail(e.target.value)}
-                      placeholder="Ej. mtorres@entidad.gob.pe"
-                      className="w-full px-3.5 py-2.5 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#D91023]"
-                    />
-                    {regErrors.email && (
-                      <p className="text-xs text-rose-600 mt-1">{regErrors.email}</p>
-                    )}
-                  </div>
-
-                  <div className="pt-1">
-                    <label className="flex items-start gap-2.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={regConsent}
-                        onChange={(e) => setRegConsent(e.target.checked)}
-                        className="mt-1 rounded border-slate-300 text-[#D91023] focus:ring-[#D91023]"
-                      />
-                      <span className="text-xs text-slate-600 leading-relaxed">
-                        Autorizo el registro de mis respuestas y puntajes en esta sesión para el
-                        seguimiento académico del taller y la generación de mi reporte PDF.
-                      </span>
-                    </label>
-                    {regErrors.consent && (
-                      <p className="text-xs text-rose-600 mt-1">{regErrors.consent}</p>
-                    )}
-                  </div>
-
-                  <button
-                    type="submit"
-                    className="w-full py-3 px-4 rounded-xl bg-[#D91023] hover:bg-red-700 text-white font-bold text-sm shadow-sm transition cursor-pointer"
-                  >
-                    Iniciar Simulación de Casos →
-                  </button>
-                </form>
-              </div>
-            </div>
-          ) : (
-            /* VISTA ACTIVA DEL SIMULADOR PARA EL PARTICIPANTE */
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-              {/* COLUMNA IZQUIERDA (8 COLS): CASO Y PREGUNTAS SECUENCIALES */}
-              <div className="lg:col-span-8 space-y-5">
-                {/* SELECTOR SECUENCIAL DE CASOS */}
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                  {CASES_DATA.map((c, idx) => {
-                    const isUnlocked = idx <= unlockedCaseIndex;
-                    const cAnswered = c.questions.filter(
-                      (q) => activeParticipant.answers?.[q.id]
-                    ).length;
-                    const isCurrent = activeCaseIdx === idx;
-
-                    return (
-                      <button
-                        key={c.id}
-                        type="button"
-                        disabled={!isUnlocked}
-                        onClick={() => {
-                          setActiveCaseIdx(idx);
-                          setValidationAlert('');
-                        }}
-                        className={`text-left p-3.5 rounded-xl border transition ${
-                          !isUnlocked
-                            ? 'bg-slate-100 border-slate-200 opacity-60 cursor-not-allowed'
-                            : isCurrent
-                            ? 'bg-slate-900 text-white border-slate-900 shadow-sm'
-                            : 'bg-white text-slate-800 border-slate-200 hover:border-slate-400'
-                        }`}
-                      >
-                        <div className="flex items-center justify-between text-[11px] font-bold mb-1">
-                          <span className={isCurrent ? 'text-red-400' : 'text-[#D91023]'}>
-                            {c.code} • {c.maxPoints.toFixed(1)} pts
-                          </span>
-                          <span>
-                            {!isUnlocked ? '🔒 Bloqueado' : `${cAnswered}/4 ítems`}
-                          </span>
-                        </div>
-                        <div className="text-xs font-bold line-clamp-2">{c.title}</div>
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* EXPEDIENTE NARRATIVO DEL CASO ACTUAL */}
-                {(() => {
-                  const currentCase = CASES_DATA[activeCaseIdx];
-                  const answeredInCase = currentCase.questions.filter(
-                    (q) => activeParticipant.answers?.[q.id]
-                  ).length;
-
-                  // Solo mostrar preguntas hasta la siguiente pendiente (desbloqueo estricto una a una)
-                  const visibleQuestionsCount = Math.min(
-                    currentCase.questions.length,
-                    answeredInCase + 1
-                  );
-                  const visibleQuestions = currentCase.questions.slice(0, visibleQuestionsCount);
-
-                  return (
-                    <>
-                      <section className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-                        <div className="flex flex-wrap items-center justify-between gap-2 pb-3 mb-4 border-b border-slate-100">
-                          <div>
-                            <span className="text-xs font-bold uppercase tracking-wider text-[#D91023]">
-                              {currentCase.code} — Eje: {currentCase.axis}
-                            </span>
-                            <h2 className="text-xl font-extrabold text-slate-900 mt-0.5">
-                              {currentCase.title}
-                            </h2>
-                          </div>
-                          <span className="text-xs font-semibold bg-slate-100 text-slate-700 px-3 py-1 rounded-full border border-slate-200">
-                            Valor del caso: {currentCase.maxPoints.toFixed(1)} pts
-                          </span>
-                        </div>
-
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 bg-slate-50 border border-slate-200 rounded-xl p-3.5 mb-4 text-xs">
-                          <div>
-                            <span className="font-bold text-slate-700 block">
-                              Articulación Territorial:
-                            </span>
-                            <span className="text-slate-600">{currentCase.level}</span>
-                          </div>
-                          <div>
-                            <span className="font-bold text-slate-700 block">
-                              Rol Protagonista que usted asume:
-                            </span>
-                            <span className="text-slate-600">{currentCase.role}</span>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3 text-sm text-slate-700 leading-relaxed">
-                          {currentCase.narrative.map((paragraph, pIdx) => (
-                            <p key={pIdx}>{paragraph}</p>
-                          ))}
-                        </div>
-                      </section>
-
-                      {/* REACTIVOS SECUENCIALES (SIN PISTAS Y DESBLOQUEO PROGRESIVO) */}
-                      <section className="space-y-4">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-sm font-extrabold uppercase tracking-wider text-slate-700">
-                            Toma de Decisiones ({answeredInCase} de {currentCase.questions.length}{' '}
-                            respondidas en este caso)
-                          </h3>
-                          <span className="text-xs text-slate-500">
-                            Avance secuencial • Intento único
-                          </span>
-                        </div>
-
-                        {visibleQuestions.map((q) => {
-                          const savedAns = activeParticipant.answers?.[q.id];
-                          const isAnswered = Boolean(savedAns);
-                          const currentSel = isAnswered
-                            ? savedAns.selected
-                            : draftSelections[q.id] || '';
-                          const currentJust = isAnswered
-                            ? savedAns.justification
-                            : draftJustifications[q.id] || '';
-                          const wordCount = currentJust
-                            .trim()
-                            .split(/\s+/)
-                            .filter(Boolean).length;
-
-                          const feedback = isAnswered
-                            ? analyzeJustificationSocratic(
-                                q,
-                                savedAns.selected,
-                                savedAns.justification
-                              )
-                            : null;
-
-                          return (
-                            <div
-                              key={q.id}
-                              className={`bg-white rounded-2xl shadow-sm border p-6 transition ${
-                                isAnswered
-                                  ? feedback.isCorrect
-                                    ? 'border-emerald-300'
-                                    : 'border-rose-300'
-                                  : 'border-slate-300 ring-2 ring-slate-900/5'
-                              }`}
-                            >
-                              <div className="flex items-start justify-between gap-3 mb-4">
-                                <div className="flex items-center gap-2.5">
-                                  <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white text-xs font-extrabold">
-                                    Pregunta {q.code}
-                                  </span>
-                                  <span className="text-xs font-bold text-slate-500">
-                                    Puntaje: {q.points.toFixed(1)} pts
-                                  </span>
-                                </div>
-                                {isAnswered && (
-                                  <span
-                                    className={`text-xs font-extrabold px-3 py-1 rounded-full ${
-                                      feedback.isCorrect
-                                        ? 'bg-emerald-100 text-emerald-800'
-                                        : 'bg-rose-100 text-rose-800'
-                                    }`}
-                                  >
-                                    {feedback.isCorrect
-                                      ? `✓ Correcta (+${feedback.earnedPoints.toFixed(1)} pts)`
-                                      : `✕ Incorrecta (0.0 / ${q.points.toFixed(1)} pts)`}
-                                  </span>
-                                )}
-                              </div>
-
-                              <p className="text-sm sm:text-base font-bold text-slate-900 mb-4 leading-snug">
-                                {q.prompt}
-                              </p>
-
-                              {/* ALTERNATIVAS CERRADAS */}
-                              <div className="space-y-2.5 mb-5">
-                                {q.options.map((opt) => {
-                                  const isSelected = currentSel === opt.id;
-                                  const isKey = q.correctOption === opt.id;
-
-                                  let cardStyle =
-                                    'border-slate-200 hover:border-slate-400 bg-white';
-                                  if (isAnswered) {
-                                    if (isKey) {
-                                      cardStyle =
-                                        'border-emerald-500 bg-emerald-50/70 text-emerald-950';
-                                    } else if (isSelected && !isKey) {
-                                      cardStyle = 'border-rose-500 bg-rose-50/70 text-rose-950';
-                                    } else {
-                                      cardStyle = 'border-slate-200 bg-slate-50 opacity-70';
-                                    }
-                                  } else if (isSelected) {
-                                    cardStyle =
-                                      'border-[#D91023] bg-red-50/40 ring-1 ring-[#D91023]';
-                                  }
-
-                                  return (
-                                    <label
-                                      key={opt.id}
-                                      className={`flex items-start gap-3 p-3.5 rounded-xl border text-sm transition ${
-                                        isAnswered ? 'cursor-default' : 'cursor-pointer'
-                                      } ${cardStyle}`}
-                                    >
-                                      <input
-                                        type="radio"
-                                        name={q.id}
-                                        value={opt.id}
-                                        disabled={isAnswered}
-                                        checked={isSelected}
-                                        onChange={() => {
-                                          setDraftSelections((prev) => ({
-                                            ...prev,
-                                            [q.id]: opt.id,
-                                          }));
-                                          setValidationAlert('');
-                                        }}
-                                        className="mt-1 text-[#D91023] focus:ring-[#D91023]"
-                                      />
-                                      <div className="flex-1">
-                                        <span className="font-extrabold mr-1.5">{opt.id}.</span>
-                                        <span>{opt.text}</span>
-                                      </div>
-                                    </label>
-                                  );
-                                })}
-                              </div>
-
-                              {/* SUSTENTO TÉCNICO OBLIGATORIO */}
-                              <div className="mb-4">
-                                <div className="flex items-center justify-between mb-1.5">
-                                  <label className="text-xs font-bold text-slate-700">
-                                    Sustento técnico-normativo de su decisión (obligatorio) *
-                                  </label>
-                                  <span
-                                    className={`text-xs font-semibold ${
-                                      wordCount >= config.minJustificationWords
-                                        ? 'text-emerald-700'
-                                        : 'text-slate-500'
-                                    }`}
-                                  >
-                                    {wordCount} / {config.minJustificationWords} palabras mínimas
-                                  </span>
-                                </div>
-                                <textarea
-                                  rows={3}
-                                  disabled={isAnswered}
-                                  value={currentJust}
-                                  onChange={(e) => {
-                                    setDraftJustifications((prev) => ({
-                                      ...prev,
-                                      [q.id]: e.target.value,
-                                    }));
-                                    setValidationAlert('');
-                                  }}
-                                  placeholder="Fundamente su elección citando los principios éticos, plazos, actores responsables o mecanismos preventivos aplicables al caso..."
-                                  className="w-full p-3 text-sm rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-[#D91023] disabled:bg-slate-50 disabled:text-slate-700"
-                                />
-                              </div>
-
-                              {!isAnswered && (
-                                <>
-                                  {validationAlert && (
-                                    <div className="mb-3 p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-700">
-                                      {validationAlert}
-                                    </div>
-                                  )}
-                                  <button
-                                    type="button"
-                                    onClick={() => handleConfirmAnswer(q)}
-                                    disabled={
-                                      !currentSel || wordCount < config.minJustificationWords
-                                    }
-                                    className="px-5 py-2.5 rounded-xl bg-[#D91023] hover:bg-red-700 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-bold transition shadow-sm"
-                                  >
-                                    Confirmar y Calificar Respuesta
-                                  </button>
-                                </>
-                              )}
-
-                              {/* RETROALIMENTACIÓN INMEDIATA SOCRÁTICA Y COMPLEMENTARIA */}
-                              {isAnswered && feedback && (
-                                <div className="mt-4 rounded-xl bg-slate-900 text-slate-100 p-4 sm:p-5 space-y-3 border border-slate-700">
-                                  <div className="flex items-center justify-between border-b border-slate-700 pb-2">
-                                    <span className="text-xs font-extrabold uppercase tracking-wider text-sky-400">
-                                      Retroalimentación Socrática y Análisis de Rúbrica
-                                    </span>
-                                    <span className="text-xs font-bold text-slate-300">
-                                      Clave correcta: {q.correctOption}
-                                    </span>
-                                  </div>
-
-                                  <div className="text-xs sm:text-sm leading-relaxed">
-                                    <span className="font-bold text-emerald-400">
-                                      1. Reconocimiento de su argumento:{' '}
-                                    </span>
-                                    <span>{feedback.recognition}</span>
-                                  </div>
-
-                                  <div className="text-xs sm:text-sm leading-relaxed">
-                                    <span className="font-bold text-amber-300">
-                                      2. Complemento técnico-normativo:{' '}
-                                    </span>
-                                    <span>{feedback.complement}</span>
-                                  </div>
-
-                                  <div className="bg-slate-800/90 border-l-4 border-sky-400 p-3 rounded-r-lg text-xs sm:text-sm">
-                                    <span className="font-bold text-sky-300 block mb-0.5">
-                                      3. Pregunta socrática para profundizar:
-                                    </span>
-                                    <em className="text-slate-200">{feedback.socraticQuestion}</em>
-                                  </div>
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-
-                        {/* BOTÓN DE AVANCE AL SIGUIENTE CASO AL COMPLETAR LAS 4 PREGUNTAS */}
-                        {answeredInCase === 4 && activeCaseIdx < CASES_DATA.length - 1 && (
-                          <div className="bg-emerald-50 border border-emerald-200 rounded-2xl p-5 flex flex-wrap items-center justify-between gap-4">
-                            <div>
-                              <h4 className="text-sm font-extrabold text-emerald-900">
-                                ¡Ha completado el {currentCase.code}!
-                              </h4>
-                              <p className="text-xs text-emerald-700 mt-0.5">
-                                El siguiente caso ya se encuentra habilitado para continuar su
-                                evaluación.
-                              </p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setActiveCaseIdx((prev) => prev + 1);
-                                window.scrollTo({ top: 0, behavior: 'smooth' });
-                              }}
-                              className="px-5 py-2.5 rounded-xl bg-emerald-700 hover:bg-emerald-800 text-white text-sm font-bold shadow-sm transition"
-                            >
-                              Continuar al Caso {activeCaseIdx + 2} →
-                            </button>
-                          </div>
-                        )}
-                      </section>
-                    </>
-                  );
-                })()}
-              </div>
-
-              {/* COLUMNA DERECHA (4 COLS): PANEL ADAPTATIVO EN TIEMPO REAL Y PDF */}
-              <aside className="lg:col-span-4 space-y-5 lg:sticky lg:top-20">
-                <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-5">
-                  <div className="flex items-center justify-between mb-3">
-                    <h3 className="text-xs font-extrabold uppercase tracking-wider text-slate-600">
-                      Progreso y Calificación
-                    </h3>
-                    <span className="text-xs font-bold text-slate-900">
-                      {participantProfile.answeredCount} / 12 ítems
-                    </span>
-                  </div>
-
-                  {/* Barra de progreso */}
-                  <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden mb-4">
-                    <div
-                      className="h-full bg-[#D91023] transition-all duration-300"
-                      style={{ width: `${participantProfile.progressPct}%` }}
-                    />
-                  </div>
-
-                  {/* Puntaje sobre 20 */}
-                  <div className="bg-slate-900 text-white rounded-xl p-4 mb-4 flex items-center justify-between">
-                    <div>
-                      <div className="text-[11px] uppercase tracking-wider text-slate-400">
-                        Puntaje Acumulado
-                      </div>
-                      <div className="text-2xl font-black text-white">
-                        {participantProfile.totalScore.toFixed(1)}{' '}
-                        <span className="text-sm font-semibold text-slate-400">/ 20.0 pts</span>
-                      </div>
-                    </div>
-                    <span
-                      className={`text-[11px] font-bold px-2.5 py-1 rounded-full border ${participantProfile.badgeColor}`}
-                    >
-                      {participantProfile.level}
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-slate-600 leading-relaxed mb-4">
-                    {participantProfile.summary}
-                  </p>
-
-                  {/* Indicadores por eje temático */}
-                  <div className="space-y-3 border-t border-slate-100 pt-4">
-                    <h4 className="text-xs font-bold text-slate-700">
-                      Desempeño por Eje Temático
-                    </h4>
-                    {participantProfile.axes.map((ax) => (
-                      <div key={ax.key}>
-                        <div className="flex justify-between text-xs mb-1">
-                          <span className="font-semibold text-slate-700">{ax.label}</span>
-                          <span className="font-bold text-slate-900">
-                            {ax.earned.toFixed(1)}/{ax.max.toFixed(1)} pts ({ax.pct}%)
-                          </span>
-                        </div>
-                        <div className="w-full h-2 bg-slate-100 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-slate-800 transition-all duration-300"
-                            style={{ width: `${ax.pct}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Plan de acción territorial */}
-                  {participantProfile.answeredCount > 0 && (
-                    <div className="mt-4 border-t border-slate-100 pt-4">
-                      <h4 className="text-xs font-bold text-slate-700 mb-2">
-                        Plan de Acción Territorial Sugerido
-                      </h4>
-                      <div className="space-y-2">
-                        {participantProfile.actionPlan.map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-xs"
-                          >
-                            <div className="font-bold text-slate-800">{item.eje}</div>
-                            <div className="text-slate-600 mt-0.5">{item.accion}</div>
-                            <div className="text-[11px] font-semibold text-[#D91023] mt-1">
-                              Plazo: {item.plazo}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Botón Descargar PDF */}
-                  <button
-                    type="button"
-                    onClick={() => exportParticipantPDF(activeParticipant, config)}
-                    className="mt-5 w-full py-2.5 px-4 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center justify-center gap-2 transition shadow-sm"
-                  >
-                    <span>📄 Descargar Reporte Individual (PDF)</span>
-                  </button>
-                </div>
-              </aside>
-            </div>
-          )
-        ) : (
-          /* VISTA DOCENTE / FACILITADOR (AUTENTICADA) */
+      <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8">
+        {/* ================================================================== */}
+        {/* MODO 1: VISTA DOCENTE / FACILITADOR                                */}
+        {/* ================================================================== */}
+        {viewMode === 'teacher' ? (
           <div className="space-y-6">
-            <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6">
-              <div className="flex flex-wrap items-center justify-between gap-4 pb-5 border-b border-slate-200">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-xl font-extrabold text-slate-900">
-                      Panel Docente y Analítica de Cohorte
-                    </h2>
-                    <span className="text-xs font-extrabold px-2.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-300">
-                      {APP_VERSION}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Monitoreo en tiempo real, exportación Excel (CSV) y configuración institucional
-                  </p>
+            <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
+              <div>
+                <div className="flex items-center gap-2">
+                  <h2 className="text-xl font-bold text-slate-900">
+                    Panel de Gestión Docente y Seguimiento
+                  </h2>
+                  <span className="px-2 py-0.5 text-[11px] font-bold bg-emerald-100 text-emerald-800 rounded-md">
+                    v3.1
+                  </span>
                 </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={handleLoadDemo}
-                    className="px-3 py-2 rounded-lg text-xs font-semibold bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 transition"
-                  >
-                    Cargar Demo (2 ejemplos)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => exportCohortCSV(cohort)}
-                    disabled={cohort.length === 0}
-                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-emerald-700 hover:bg-emerald-800 disabled:bg-slate-300 text-white transition"
-                  >
-                    Exportar Excel (CSV)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleResetPlatform}
-                    className="px-3.5 py-2 rounded-lg text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white transition"
-                  >
-                    Reiniciar Plataforma
-                  </button>
-                </div>
+                <p className="text-sm text-slate-600 mt-0.5">
+                  Monitoreo en tiempo real de calificaciones, marcas de tiempo (ingreso/fin) y exportación de resultados.
+                </p>
               </div>
 
-              {/* KPIs DE COHORTE */}
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 my-5">
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="text-xs text-slate-500 font-semibold">
-                    Participantes Registrados
-                  </div>
-                  <div className="text-2xl font-black text-slate-900 mt-1">
-                    {cohortMetrics.total}
-                  </div>
-                </div>
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="text-xs text-slate-500 font-semibold">
-                    Simulación Completada
-                  </div>
-                  <div className="text-2xl font-black text-slate-900 mt-1">
-                    {cohortMetrics.completed}
-                  </div>
-                </div>
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="text-xs text-slate-500 font-semibold">
-                    Promedio General (/20)
-                  </div>
-                  <div className="text-2xl font-black text-[#D91023] mt-1">
-                    {cohortMetrics.avgScore.toFixed(1)} pts
-                  </div>
-                </div>
-                <div className="p-4 rounded-xl bg-slate-50 border border-slate-200">
-                  <div className="text-xs text-slate-500 font-semibold">
-                    Tasa de Logro (≥{config.passingScore} pts)
-                  </div>
-                  <div className="text-2xl font-black text-emerald-700 mt-1">
-                    {cohortMetrics.passRate}%
-                  </div>
-                </div>
-              </div>
-
-              {/* 3 PESTAÑAS DE LA VISTA DOCENTE */}
-              <div className="flex flex-wrap gap-2 border-b border-slate-200 pb-3 mb-5">
+              <div className="flex flex-wrap gap-2">
                 <button
                   type="button"
                   onClick={() => setTeacherTab('cohort')}
-                  className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                     teacherTab === 'cohort'
-                      ? 'bg-slate-900 text-white'
+                      ? 'bg-red-700 text-white'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
-                  Resultados por Participante ({cohort.length})
+                  <BarChart3 className="w-4 h-4" />
+                  Resultados y Cohorte ({cohort.length})
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTeacherTab('comparator')}
-                  className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
-                    teacherTab === 'comparator'
-                      ? 'bg-slate-900 text-white'
+                  onClick={() => setTeacherTab('matrix')}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition ${
+                    teacherTab === 'matrix'
+                      ? 'bg-red-700 text-white'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
-                  Comparador de Decisiones e Ítems
+                  <BookOpen className="w-4 h-4" />
+                  Matriz Normativa y Claves
                 </button>
                 <button
                   type="button"
-                  onClick={() => setTeacherTab('settings')}
-                  className={`px-4 py-2 rounded-lg text-xs font-bold transition ${
+                  onClick={() => {
+                    setDraftConfig(config);
+                    setTeacherTab('settings');
+                  }}
+                  className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-bold transition ${
                     teacherTab === 'settings'
-                      ? 'bg-slate-900 text-white'
+                      ? 'bg-red-700 text-white'
                       : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
                   }`}
                 >
+                  <Settings className="w-4 h-4" />
                   Configuración Institucional y Marca
                 </button>
               </div>
+            </div>
 
-              {/* PESTAÑA 1: TABLA DE PARTICIPANTES */}
-              {teacherTab === 'cohort' && (
-                <div>
-                  <div className="mb-4">
-                    <input
-                      type="text"
-                      value={searchTerm}
-                      onChange={(e) => setSearchTerm(e.target.value)}
-                      placeholder="Buscar por nombre, DNI o correo electrónico..."
-                      className="w-full sm:w-96 px-3.5 py-2 text-sm rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-slate-900"
-                    />
+            {/* PESTAÑA DOCENTE 1: COHORTE Y RESULTADOS */}
+            {teacherTab === 'cohort' && (
+              <div className="space-y-6">
+                {/* Tarjetas KPI */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                    <div className="text-xs font-semibold text-slate-500">
+                      Participantes Registrados
+                    </div>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      {cohortStats.total}
+                    </div>
                   </div>
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                    <div className="text-xs font-semibold text-slate-500">
+                      Simulaciones Finalizadas
+                    </div>
+                    <div className="text-2xl font-extrabold text-emerald-700 mt-1">
+                      {cohortStats.completedCount}
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                    <div className="text-xs font-semibold text-slate-500">
+                      Promedio General (Finalizados)
+                    </div>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      {cohortStats.avgScore.toFixed(1)}{' '}
+                      <span className="text-sm font-normal text-slate-500">/ 20.0</span>
+                    </div>
+                  </div>
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs">
+                    <div className="text-xs font-semibold text-slate-500">
+                      Tasa de Aprobación (≥ 14 pts)
+                    </div>
+                    <div className="text-2xl font-extrabold text-blue-700 mt-1">
+                      {cohortStats.passRate}%
+                    </div>
+                  </div>
+                </div>
 
-                  {filteredCohort.length === 0 ? (
-                    <div className="text-center py-12 bg-slate-50 rounded-xl border border-dashed border-slate-300">
-                      <p className="text-sm font-bold text-slate-700">
-                        No hay participantes registrados en este momento (0 registros).
-                      </p>
-                      <p className="text-xs text-slate-500 mt-1">
-                        Los resultados aparecerán automáticamente a medida que los participantes
-                        ingresen y resuelvan los casos.
+                {/* Tabla de Resultados por Participante */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+                  <div className="p-4 border-b border-slate-200 flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">
+                        Resultados por Participante ({cohort.length})
+                      </h3>
+                      <p className="text-xs text-slate-500">
+                        Incluye hora exacta de ingreso al formulario y hora de culminación de las 12 preguntas.
                       </p>
                     </div>
-                  ) : (
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-left border-collapse text-xs">
-                        <thead>
-                          <tr className="bg-slate-100 text-slate-700 border-b border-slate-200">
-                            <th className="py-3 px-3 font-bold">Participante</th>
-                            <th className="py-3 px-3 font-bold">DNI</th>
-                            <th className="py-3 px-3 font-bold">Avance</th>
-                            <th className="py-3 px-3 font-bold">Puntaje (/20)</th>
-                            <th className="py-3 px-3 font-bold">Nivel Adaptativo</th>
-                            <th className="py-3 px-3 font-bold text-right">Acciones</th>
+
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={exportCohortCSV}
+                        disabled={cohort.length === 0}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-40 text-white text-xs font-bold transition"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Descargar Excel (CSV)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleLoadDemoExamples}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        Cargar Demo (2 ejemplos)
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleResetPlatform}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-red-50 hover:bg-red-100 border border-red-200 text-red-700 text-xs font-bold transition"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                        Reiniciar Plataforma
+                      </button>
+                    </div>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm border-collapse">
+                      <thead>
+                        <tr className="bg-slate-100 text-slate-700 text-xs uppercase border-b border-slate-200">
+                          <th className="py-3 px-3 text-left">Participante</th>
+                          <th className="py-3 px-3 text-left">Hora de ingreso</th>
+                          <th className="py-3 px-3 text-left">Hora de fin</th>
+                          <th className="py-3 px-3 text-center">Progreso</th>
+                          <th className="py-3 px-3 text-center">Caso 1</th>
+                          <th className="py-3 px-3 text-center">Caso 2</th>
+                          <th className="py-3 px-3 text-center">Caso 3</th>
+                          <th className="py-3 px-3 text-center">Total / 20</th>
+                          <th className="py-3 px-3 text-right">Detalle</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200">
+                        {cohort.length === 0 ? (
+                          <tr>
+                            <td
+                              colSpan={9}
+                              className="py-10 px-4 text-center text-slate-500 text-sm"
+                            >
+                              No hay participantes registrados en este navegador todavía. Los registros aparecerán aquí automáticamente conforme completen el formulario de ingreso.
+                            </td>
                           </tr>
-                        </thead>
-                        <tbody className="divide-y divide-slate-200">
-                          {filteredCohort.map((p) => {
-                            const prof = computeAdaptiveProfile(p.answers);
+                        ) : (
+                          cohort.map((p) => {
+                            const answeredCount = Object.keys(p.answers).length;
+                            const c1 = CASES_DATA[0].questions.reduce(
+                              (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+                              0
+                            );
+                            const c2 = CASES_DATA[1].questions.reduce(
+                              (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+                              0
+                            );
+                            const c3 = CASES_DATA[2].questions.reduce(
+                              (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+                              0
+                            );
+                            const total = c1 + c2 + c3;
+
                             return (
                               <tr key={p.id} className="hover:bg-slate-50">
                                 <td className="py-3 px-3">
-                                  <div className="font-bold text-slate-900">{p.name}</div>
-                                  <div className="text-slate-500">{p.email}</div>
+                                  <div className="font-bold text-slate-900">
+                                    {p.fullName}
+                                  </div>
+                                  <div className="text-xs text-slate-500">
+                                    DNI: {p.dni} · {p.email}
+                                  </div>
                                 </td>
-                                <td className="py-3 px-3 font-mono">{p.dni}</td>
-                                <td className="py-3 px-3">
-                                  {prof.answeredCount}/12 ({prof.progressPct}%)
+                                <td className="py-3 px-3 text-xs text-slate-600 whitespace-nowrap">
+                                  {formatTimestamp(p.startedAt)}
                                 </td>
-                                <td className="py-3 px-3 font-extrabold text-slate-900">
-                                  {prof.totalScore.toFixed(1)} pts
+                                <td className="py-3 px-3 text-xs whitespace-nowrap">
+                                  {p.completedAt ? (
+                                    <span className="text-slate-700 font-medium">
+                                      {formatTimestamp(p.completedAt)}
+                                    </span>
+                                  ) : (
+                                    <span className="inline-flex items-center px-2 py-0.5 rounded-full bg-amber-100 text-amber-800 font-semibold">
+                                      En curso
+                                    </span>
+                                  )}
                                 </td>
-                                <td className="py-3 px-3">
-                                  <span
-                                    className={`px-2.5 py-0.5 rounded-full font-bold border ${prof.badgeColor}`}
-                                  >
-                                    {prof.level}
-                                  </span>
+                                <td className="py-3 px-3 text-center text-xs font-semibold">
+                                  {answeredCount} / 12
                                 </td>
-                                <td className="py-3 px-3 text-right space-x-2">
+                                <td className="py-3 px-3 text-center text-xs">
+                                  {c1.toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-center text-xs">
+                                  {c2.toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-center text-xs">
+                                  {c3.toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-center font-extrabold text-slate-900">
+                                  {total.toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-right whitespace-nowrap">
                                   <button
                                     type="button"
-                                    onClick={() => setInspectParticipantId(p.id)}
-                                    className="px-2.5 py-1 rounded bg-slate-800 hover:bg-slate-700 text-white font-semibold"
+                                    onClick={() => setSelectedDetailParticipant(p)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold mr-1.5"
                                   >
-                                    Ver sustentos
+                                    <Eye className="w-3.5 h-3.5" />
+                                    Ver
                                   </button>
                                   <button
                                     type="button"
-                                    onClick={() => exportParticipantPDF(p, config)}
-                                    className="px-2.5 py-1 rounded bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold border border-slate-300"
+                                    onClick={() => handleOpenPrintablePdf(p)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md bg-red-50 hover:bg-red-100 text-red-700 text-xs font-semibold"
                                   >
+                                    <Printer className="w-3.5 h-3.5" />
                                     PDF
                                   </button>
                                 </td>
                               </tr>
                             );
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  )}
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
-              )}
+              </div>
+            )}
 
-              {/* PESTAÑA 2: COMPARADOR DE DECISIONES POR ÍTEM */}
-              {teacherTab === 'comparator' && (
-                <div className="space-y-4">
-                  <p className="text-xs text-slate-600">
-                    Distribución de alternativas marcadas por la cohorte en cada una de las 12
-                    preguntas para orientar la plenaria de retroalimentación del taller.
-                  </p>
-                  {CASES_DATA.map((c) => (
-                    <div key={c.id} className="border border-slate-200 rounded-xl p-4">
-                      <h4 className="text-sm font-extrabold text-slate-900 mb-3">
-                        {c.code}: {c.title}
-                      </h4>
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                        {c.questions.map((q) => {
-                          const responses = cohort
-                            .map((p) => p.answers?.[q.id]?.selected)
-                            .filter(Boolean);
-                          const totalResp = responses.length;
-                          const correctCount = responses.filter(
-                            (r) => r === q.correctOption
-                          ).length;
-                          const accuracy =
-                            totalResp > 0 ? Math.round((correctCount / totalResp) * 100) : 0;
-
-                          return (
-                            <div
-                              key={q.id}
-                              className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs"
-                            >
-                              <div className="flex justify-between font-bold text-slate-800 mb-1">
-                                <span>
-                                  Ítem {q.code} (Clave: {q.correctOption})
-                                </span>
-                                <span className="text-emerald-700">
-                                  Acierto: {accuracy}% ({correctCount}/{totalResp})
-                                </span>
-                              </div>
-                              <p className="text-slate-600 line-clamp-2 mb-2">{q.prompt}</p>
-                              <div className="flex gap-2">
-                                {['A', 'B', 'C'].map((letter) => {
-                                  const cnt = responses.filter((r) => r === letter).length;
-                                  return (
-                                    <span
-                                      key={letter}
-                                      className={`px-2 py-0.5 rounded font-semibold ${
-                                        letter === q.correctOption
-                                          ? 'bg-emerald-100 text-emerald-800 border border-emerald-300'
-                                          : 'bg-white text-slate-600 border border-slate-200'
-                                      }`}
-                                    >
-                                      {letter}: {cnt}
-                                    </span>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          );
-                        })}
+            {/* PESTAÑA DOCENTE 2: MATRIZ NORMATIVA Y CLAVES */}
+            {teacherTab === 'matrix' && (
+              <div className="space-y-4">
+                {CASES_DATA.map((c) => (
+                  <div
+                    key={c.id}
+                    className="bg-white rounded-xl border border-slate-200 p-5 shadow-xs space-y-4"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                      <div>
+                        <span className="text-xs font-bold uppercase text-red-700">
+                          Caso {c.number} · {c.governmentLevel}
+                        </span>
+                        <h3 className="text-base font-bold text-slate-900">{c.title}</h3>
                       </div>
+                      <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-800 text-xs font-bold">
+                        Puntaje máximo: {c.maxPoints.toFixed(1)} pts
+                      </span>
                     </div>
-                  ))}
-                </div>
-              )}
 
-              {/* PESTAÑA 3: CONFIGURACIÓN INSTITUCIONAL Y MARCA */}
-              {teacherTab === 'settings' && (
-                <form onSubmit={handleSaveConfig} className="max-w-2xl space-y-4">
+                    <div className="space-y-3">
+                      {c.questions.map((q) => {
+                        const correctOpt = q.options.find(
+                          (o) => o.id === q.correctOption
+                        );
+                        return (
+                          <div
+                            key={q.id}
+                            className="p-3.5 rounded-lg bg-slate-50 border border-slate-200 text-xs space-y-1.5"
+                          >
+                            <div className="flex justify-between font-bold text-slate-900">
+                              <span>
+                                {q.number} — {q.title}
+                              </span>
+                              <span className="text-emerald-700">
+                                Clave: {q.correctOption} ({q.points.toFixed(1)} pts)
+                              </span>
+                            </div>
+                            <p className="text-slate-700">{q.prompt}</p>
+                            <p className="text-emerald-800 bg-emerald-50 p-2 rounded border border-emerald-200">
+                              <strong>Respuesta correcta ({q.correctOption}):</strong>{' '}
+                              {correctOpt?.text}
+                            </p>
+                            <p className="text-slate-600">
+                              <strong>Sustento normativo:</strong> {q.rubric.normativeBasis}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* PESTAÑA DOCENTE 3: CONFIGURACIÓN INSTITUCIONAL Y MARCA */}
+            {teacherTab === 'settings' && (
+              <form
+                onSubmit={handleSaveConfig}
+                className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-5 max-w-2xl"
+              >
+                <h3 className="text-base font-bold text-slate-900 border-b border-slate-200 pb-3">
+                  Personalización Institucional y Credenciales Docentes
+                </h3>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Nombre del Taller Virtual
+                  </label>
+                  <input
+                    type="text"
+                    value={draftConfig.workshopTitle}
+                    onChange={(e) =>
+                      setDraftConfig({ ...draftConfig, workshopTitle: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Entidad Organizadora
+                  </label>
+                  <input
+                    type="text"
+                    value={draftConfig.institutionName}
+                    onChange={(e) =>
+                      setDraftConfig({ ...draftConfig, institutionName: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                  />
+                </div>
+
+                <div className="p-4 rounded-lg bg-slate-50 border border-slate-200 space-y-3">
+                  <label className="block text-xs font-bold text-slate-700">
+                    Logotipo Oficial MIDIS (Vista previa actual)
+                  </label>
+                  <div className="p-3 bg-white border border-slate-200 rounded-lg inline-block">
+                    <MidisLogoBadge customUrl={draftConfig.customLogoDataUrl} />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold cursor-pointer">
+                      <Upload className="w-3.5 h-3.5" />
+                      Subir imagen PNG/JPG
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoFileUpload}
+                        className="hidden"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDraftConfig({
+                          ...draftConfig,
+                          customLogoDataUrl: '/logo-midis.png',
+                        })
+                      }
+                      className="px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700"
+                    >
+                      Restaurar emblema oficial MIDIS
+                    </button>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Título del Taller Virtual
+                      Usuario Vista Docente
                     </label>
                     <input
                       type="text"
-                      value={cfgForm.workshopTitle}
+                      value={draftConfig.teacherUsername}
                       onChange={(e) =>
-                        setCfgForm((prev) => ({ ...prev, workshopTitle: e.target.value }))
+                        setDraftConfig({
+                          ...draftConfig,
+                          teacherUsername: e.target.value,
+                        })
                       }
-                      className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-300"
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Clave Vista Docente
+                    </label>
+                    <input
+                      type="text"
+                      value={draftConfig.teacherPassword}
+                      onChange={(e) =>
+                        setDraftConfig({
+                          ...draftConfig,
+                          teacherPassword: e.target.value,
+                        })
+                      }
+                      className="w-full px-3 py-2 border border-slate-300 rounded-lg text-sm"
+                    />
+                  </div>
+                </div>
+
+                {configSavedNotice && (
+                  <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-semibold flex items-center gap-2">
+                    <Check className="w-4 h-4" />
+                    {configSavedNotice}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="px-5 py-2.5 rounded-lg bg-red-700 hover:bg-red-800 text-white text-sm font-bold transition"
+                >
+                  Guardar configuración
+                </button>
+              </form>
+            )}
+          </div>
+        ) : !activeParticipant ? (
+          /* ================================================================ */
+          /* MODO 2: PANTALLA DE BIENVENIDA E IDENTIFICACIÓN DEL PARTICIPANTE */
+          /* ================================================================ */
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
+            {/* Columna Izquierda: Propósito y Reglas */}
+            <div className="lg:col-span-7 space-y-6">
+              <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-xs space-y-5">
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-red-50 border border-red-200 text-red-800 text-xs font-bold">
+                  <ShieldCheck className="w-4 h-4" />
+                  Oficina de Integridad Institucional — MIDIS
+                </div>
+
+                <h2 className="text-2xl sm:text-3xl font-extrabold text-slate-900 leading-tight">
+                  {config.workshopTitle}
+                </h2>
+
+                <p className="text-sm sm:text-base text-slate-600 leading-relaxed">
+                  <strong>Objetivo de aprendizaje:</strong> Al finalizar el taller virtual,
+                  diagnosticas problemáticas vinculadas a{' '}
+                  <strong>conflictos de intereses</strong>,{' '}
+                  <strong>transparencia de recursos</strong> y{' '}
+                  <strong>canales de denuncia</strong> en los servicios del MIDIS y sus
+                  Programas Sociales (PPSS), asumiendo tu rol con ética, adaptabilidad y
+                  articulación colaborativa frente a situaciones críticas.
+                </p>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-2">
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-xs font-bold text-red-700">CASO 1 · 6.5 PTS</div>
+                    <div className="text-xs font-bold text-slate-900 mt-1">
+                      Conflictos de Intereses
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      ULE Municipal · Pensión 65 y Contigo
+                    </p>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-xs font-bold text-red-700">CASO 2 · 6.5 PTS</div>
+                    <div className="text-xs font-bold text-slate-900 mt-1">
+                      Recursos en Custodia
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      Subgerencia Social · PCA y Ollas Comunes
+                    </p>
+                  </div>
+                  <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                    <div className="text-xs font-bold text-red-700">CASO 3 · 7.0 PTS</div>
+                    <div className="text-xs font-bold text-slate-900 mt-1">
+                      Denuncias y Protección
+                    </div>
+                    <p className="text-[11px] text-slate-500 mt-0.5">
+                      GORE / IAR · Cuna Más y Juntos
+                    </p>
+                  </div>
+                </div>
+
+                {/* Reglas del Simulador (2 reglas simplificadas) */}
+                <div className="border-t border-slate-200 pt-5 space-y-3">
+                  <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-red-700" />
+                    Reglas de participación en el simulador
+                  </h3>
+                  <ul className="space-y-2.5 text-xs sm:text-sm text-slate-600">
+                    <li className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-red-100 text-red-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                        1
+                      </span>
+                      <span>
+                        <strong>Intento único y avance secuencial:</strong> Analiza cada
+                        escenario, marca tu alternativa y redacta obligatoriamente un
+                        sustento técnico-normativo antes de calificar. Cada pregunta y caso
+                        se desbloquean de forma progresiva.
+                      </span>
+                    </li>
+                    <li className="flex items-start gap-2.5">
+                      <span className="w-5 h-5 rounded-full bg-red-100 text-red-800 font-bold text-xs flex items-center justify-center shrink-0 mt-0.5">
+                        2
+                      </span>
+                      <span>
+                        <strong>Calificación automática (20 pts) y Reporte Integral:</strong>{' '}
+                        Recibirás puntaje inmediato, preguntas de retroalimentación socrática
+                        personalizadas y tu <strong>Reporte Integral en PDF</strong> al
+                        concluir los tres casos.
+                      </span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            {/* Columna Derecha: Formulario de Identificación Simplificado */}
+            <div className="lg:col-span-5">
+              <form
+                onSubmit={handleStartSimulator}
+                className="bg-white p-6 sm:p-7 rounded-2xl border border-slate-200 shadow-sm space-y-4"
+              >
+                <div className="flex items-center gap-2.5 border-b border-slate-200 pb-3">
+                  <div className="w-9 h-9 rounded-lg bg-red-50 text-red-700 flex items-center justify-center">
+                    <UserCheck className="w-5 h-5" />
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900">
+                      Identificación del Participante
+                    </h3>
+                    <p className="text-xs text-slate-500">
+                      Completa tus datos para registrar tu inicio y emitir tu reporte final
+                    </p>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Nombres y Apellidos completos *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="Ej. María Fernanda Torres López"
+                    value={fullName}
+                    onChange={(e) => setFullName(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-red-600 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Número de DNI (8 dígitos) *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    maxLength={8}
+                    inputMode="numeric"
+                    placeholder="Ej. 45678912"
+                    value={dni}
+                    onChange={(e) => setDni(e.target.value.replace(/\D/g, ''))}
+                    className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-red-600 text-sm"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-slate-700 mb-1">
+                    Correo electrónico *
+                  </label>
+                  <input
+                    type="email"
+                    required
+                    placeholder="Ej. mtorres@entidad.gob.pe"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="w-full px-3.5 py-2.5 rounded-lg border border-slate-300 focus:outline-none focus:ring-2 focus:ring-red-600 text-sm"
+                  />
+                </div>
+
+                <label className="flex items-start gap-2.5 pt-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={consent}
+                    onChange={(e) => setConsent(e.target.checked)}
+                    className="mt-1 rounded border-slate-300 text-red-700 focus:ring-red-600"
+                  />
+                  <span className="text-xs text-slate-600 leading-relaxed">
+                    Declaro que los datos consignados son verídicos y autorizo su uso
+                    académico para el registro de asistencia y emisión del reporte de
+                    evaluación del taller.
+                  </span>
+                </label>
+
+                {formError && (
+                  <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-2">
+                    <AlertTriangle className="w-4 h-4 shrink-0" />
+                    {formError}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="w-full py-3 px-4 rounded-xl bg-red-700 hover:bg-red-800 text-white font-bold text-sm shadow-xs flex items-center justify-center gap-2 transition"
+                >
+                  Iniciar Simulación de Casos
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </form>
+            </div>
+          </div>
+        ) : participantStats?.isCompleted ? (
+          /* ================================================================ */
+          /* MODO 3: PANTALLA FINAL DE RESULTADOS Y REPORTE INTEGRAL PDF      */
+          /* ================================================================ */
+          <div className="max-w-4xl mx-auto space-y-6">
+            <div className="bg-white p-6 sm:p-8 rounded-2xl border border-slate-200 shadow-xs text-center space-y-4">
+              <div className="w-14 h-14 rounded-2xl bg-emerald-100 text-emerald-700 flex items-center justify-center mx-auto">
+                <Award className="w-8 h-8" />
+              </div>
+              <h2 className="text-2xl font-extrabold text-slate-900">
+                ¡Simulación Completada con Éxito!
+              </h2>
+              <p className="text-sm text-slate-600 max-w-xl mx-auto">
+                Has concluido el análisis y sustento de las 12 decisiones críticas de los
+                tres casos del taller. Descarga tu <strong>Reporte Integral en PDF</strong>{' '}
+                como evidencia de culminación.
+              </p>
+
+              <div className="inline-flex flex-col sm:flex-row items-center gap-4 bg-slate-50 border border-slate-200 px-6 py-4 rounded-2xl">
+                <div className="text-center sm:text-left">
+                  <div className="text-xs text-slate-500 font-semibold">
+                    Calificación Final Obtenida
+                  </div>
+                  <div className="text-3xl font-extrabold text-red-700">
+                    {participantStats.totalScore.toFixed(1)}{' '}
+                    <span className="text-base font-bold text-slate-500">/ 20.0 pts</span>
+                  </div>
+                </div>
+                <div className="hidden sm:block h-10 w-px bg-slate-200" />
+                <div className="text-xs text-slate-600 text-center sm:text-left space-y-1">
+                  <div>
+                    <strong>Ingreso:</strong> {formatTimestamp(activeParticipant.startedAt)}
+                  </div>
+                  <div>
+                    <strong>Culminación:</strong>{' '}
+                    {formatTimestamp(activeParticipant.completedAt)}
+                  </div>
+                </div>
+              </div>
+
+              <div className="pt-2 flex flex-wrap justify-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => handleOpenPrintablePdf(activeParticipant)}
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-red-700 hover:bg-red-800 text-white font-bold text-sm shadow-xs transition"
+                >
+                  <Printer className="w-4 h-4" />
+                  Descargar Reporte Integral en PDF
+                </button>
+                <button
+                  type="button"
+                  onClick={handleExitParticipantSession}
+                  className="inline-flex items-center gap-2 px-5 py-3 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 font-semibold text-sm transition"
+                >
+                  Finalizar y volver al inicio
+                </button>
+              </div>
+            </div>
+
+            {/* Desglose por caso */}
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {CASES_DATA.map((c) => {
+                const cScore = c.questions.reduce(
+                  (sum, q) => sum + (activeParticipant.answers[q.id]?.pointsEarned || 0),
+                  0
+                );
+                return (
+                  <div
+                    key={c.id}
+                    className="bg-white p-5 rounded-xl border border-slate-200 shadow-xs space-y-2"
+                  >
+                    <div className="text-xs font-bold text-red-700">CASO {c.number}</div>
+                    <div className="text-sm font-bold text-slate-900">{c.title}</div>
+                    <div className="text-xl font-extrabold text-slate-900 pt-1">
+                      {cScore.toFixed(1)}{' '}
+                      <span className="text-xs font-normal text-slate-500">
+                        / {c.maxPoints.toFixed(1)} pts
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : (
+          /* ================================================================ */
+          /* MODO 4: DESARROLLO SECUENCIAL DE CASOS Y PREGUNTAS               */
+          /* ================================================================ */
+          (() => {
+            const currentCase = CASES_DATA[activeCaseIndex];
+            const currentQuestion = currentCase.questions[activeQuestionIndex];
+            const existingAnswer = activeParticipant.answers[currentQuestion.id];
+            const isLastQuestionOfAll =
+              activeCaseIndex === CASES_DATA.length - 1 &&
+              activeQuestionIndex === currentCase.questions.length - 1;
+
+            return (
+              <div className="space-y-6">
+                {/* Barra de progreso de casos (bloqueo secuencial visual) */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {CASES_DATA.map((c, idx) => {
+                    const isCurrent = idx === activeCaseIndex;
+                    const answeredInCase = c.questions.filter(
+                      (q) => !!activeParticipant.answers[q.id]
+                    ).length;
+                    const isDone = answeredInCase === c.questions.length;
+                    const isLocked = idx > activeCaseIndex && answeredInCase === 0;
+
+                    return (
+                      <div
+                        key={c.id}
+                        className={`p-3.5 rounded-xl border transition flex items-center justify-between ${
+                          isCurrent
+                            ? 'bg-white border-red-600 ring-2 ring-red-100'
+                            : isDone
+                            ? 'bg-emerald-50/70 border-emerald-200'
+                            : 'bg-slate-100 border-slate-200 opacity-70'
+                        }`}
+                      >
+                        <div>
+                          <div className="text-[11px] font-bold uppercase text-slate-500">
+                            Caso {c.number} ({answeredInCase}/{c.questions.length})
+                          </div>
+                          <div className="text-xs font-bold text-slate-900 line-clamp-1">
+                            {c.title}
+                          </div>
+                        </div>
+                        {isDone ? (
+                          <CheckCircle2 className="w-5 h-5 text-emerald-600 shrink-0" />
+                        ) : isLocked ? (
+                          <Lock className="w-4 h-4 text-slate-400 shrink-0" />
+                        ) : (
+                          <Unlock className="w-4 h-4 text-red-700 shrink-0" />
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Expediente del Caso Actual (sin pistas normativas) */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                    <div>
+                      <span className="text-xs font-bold uppercase tracking-wider text-red-700">
+                        Caso {currentCase.number} de 3 · {currentCase.governmentLevel}
+                      </span>
+                      <h2 className="text-xl font-extrabold text-slate-900 mt-0.5">
+                        {currentCase.title}
+                      </h2>
+                    </div>
+                    <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-700 text-xs font-bold">
+                      Articulación: {currentCase.articulation}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
+                    <div>
+                      <span className="font-bold text-slate-800 block mb-1">
+                        Tu rol protagonista:
+                      </span>
+                      <p className="text-slate-700">{currentCase.protagonistRole}</p>
+                    </div>
+                    <div>
+                      <span className="font-bold text-slate-800 block mb-1">
+                        Actores involucrados en el territorio:
+                      </span>
+                      <p className="text-slate-700">
+                        {currentCase.secondaryActors.join(' · ')}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="space-y-2.5 text-sm text-slate-700 leading-relaxed">
+                    {currentCase.scenario.map((paragraph, i) => (
+                      <p key={i}>{paragraph}</p>
+                    ))}
+                  </div>
+
+                  <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 text-xs text-amber-950">
+                    <strong>Dilema crítico a resolver:</strong> {currentCase.criticalDilemma}
+                  </div>
+                </div>
+
+                {/* Tarjeta de Pregunta Secuencial Única en Curso */}
+                <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-5">
+                  <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-1 rounded-lg bg-red-700 text-white text-xs font-extrabold">
+                        Pregunta {currentQuestion.number}
+                      </span>
+                      <h3 className="text-base font-bold text-slate-900">
+                        {currentQuestion.title}
+                      </h3>
+                    </div>
+                    <span className="px-3 py-1 rounded-full bg-blue-50 border border-blue-200 text-blue-800 text-xs font-bold">
+                      Valor: {currentQuestion.points.toFixed(1)} puntos
+                    </span>
+                  </div>
+
+                  <p className="text-sm sm:text-base font-semibold text-slate-800">
+                    {currentQuestion.prompt}
+                  </p>
+
+                  {/* Alternativas cerradas */}
+                  <div className="space-y-2.5">
+                    {currentQuestion.options.map((opt) => {
+                      const isPicked = existingAnswer
+                        ? existingAnswer.selectedOption === opt.id
+                        : selectedOption === opt.id;
+                      const isRightKey =
+                        !!existingAnswer && opt.id === currentQuestion.correctOption;
+                      const isWrongPicked =
+                        !!existingAnswer && isPicked && !existingAnswer.isCorrect;
+
+                      let cardStyle =
+                        'border-slate-200 hover:border-slate-400 bg-white text-slate-800';
+                      if (existingAnswer) {
+                        if (isRightKey) {
+                          cardStyle =
+                            'border-emerald-600 bg-emerald-50 text-emerald-950 font-medium';
+                        } else if (isWrongPicked) {
+                          cardStyle =
+                            'border-red-500 bg-red-50 text-red-950';
+                        } else {
+                          cardStyle = 'border-slate-200 bg-slate-50 text-slate-500';
+                        }
+                      } else if (isPicked) {
+                        cardStyle =
+                          'border-red-700 bg-red-50/60 text-slate-900 ring-2 ring-red-100';
+                      }
+
+                      return (
+                        <button
+                          key={opt.id}
+                          type="button"
+                          disabled={!!existingAnswer}
+                          onClick={() => setSelectedOption(opt.id)}
+                          className={`w-full text-left p-4 rounded-xl border transition flex items-start gap-3 ${cardStyle}`}
+                        >
+                          <span
+                            className={`w-7 h-7 rounded-lg flex items-center justify-center text-xs font-extrabold shrink-0 ${
+                              isRightKey
+                                ? 'bg-emerald-600 text-white'
+                                : isWrongPicked
+                                ? 'bg-red-600 text-white'
+                                : isPicked
+                                ? 'bg-red-700 text-white'
+                                : 'bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            {opt.id}
+                          </span>
+                          <span className="text-xs sm:text-sm leading-relaxed pt-0.5">
+                            {opt.text}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Campo obligatorio de sustento técnico-normativo */}
+                  <div className="space-y-2 pt-2">
+                    <label className="block text-xs font-bold text-slate-800">
+                      Sustento técnico-normativo de tu decisión (obligatorio para calificar) *
+                    </label>
+                    <textarea
+                      rows={3}
+                      disabled={!!existingAnswer}
+                      placeholder="Argumenta por qué elegiste esta alternativa indicando el principio ético, plazo legal o mecanismo de articulación aplicable..."
+                      value={
+                        existingAnswer ? existingAnswer.justification : justificationText
+                      }
+                      onChange={(e) => setJustificationText(e.target.value)}
+                      className="w-full p-3.5 rounded-xl border border-slate-300 focus:outline-none focus:ring-2 focus:ring-red-600 text-sm disabled:bg-slate-100 disabled:text-slate-700"
                     />
                   </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Mínimo de palabras en sustento
-                      </label>
-                      <input
-                        type="number"
-                        min={5}
-                        max={100}
-                        value={cfgForm.minJustificationWords}
-                        onChange={(e) =>
-                          setCfgForm((prev) => ({
-                            ...prev,
-                            minJustificationWords: Number(e.target.value) || 12,
-                          }))
-                        }
-                        className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-300"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Nota mínima de logro (/20)
-                      </label>
-                      <input
-                        type="number"
-                        min={1}
-                        max={20}
-                        step={0.5}
-                        value={cfgForm.passingScore}
-                        onChange={(e) =>
-                          setCfgForm((prev) => ({
-                            ...prev,
-                            passingScore: Number(e.target.value) || 14,
-                          }))
-                        }
-                        className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-300"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Usuario de Acceso Docente
-                      </label>
-                      <input
-                        type="text"
-                        value={cfgForm.teacherUser}
-                        onChange={(e) =>
-                          setCfgForm((prev) => ({ ...prev, teacherUser: e.target.value }))
-                        }
-                        className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-300"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-bold text-slate-700 mb-1">
-                        Clave de Acceso Docente
-                      </label>
-                      <input
-                        type="text"
-                        value={cfgForm.teacherPass}
-                        onChange={(e) =>
-                          setCfgForm((prev) => ({ ...prev, teacherPass: e.target.value }))
-                        }
-                        className="w-full px-3.5 py-2 text-sm rounded-lg border border-slate-300"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                    <div className="text-xs font-bold text-slate-700">
-                      Logotipo Institucional (Cabecera y Reportes PDF)
-                    </div>
-                    <div className="flex flex-wrap items-center gap-4">
-                      <MidisLogoBadge customLogoUrl={cfgForm.customLogoDataUrl} />
-                      <div className="space-y-2">
-                        <input
-                          type="file"
-                          accept="image/png,image/jpeg,image/svg+xml"
-                          onChange={handleLogoFileUpload}
-                          className="block text-xs text-slate-600"
-                        />
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setCfgForm((prev) => ({
-                              ...prev,
-                              customLogoDataUrl: '/logo-midis.png',
-                            }))
-                          }
-                          className="text-xs font-semibold text-[#D91023] hover:underline"
-                        >
-                          Restaurar emblema oficial Midis (/logo-midis.png)
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {cfgSavedMsg && (
-                    <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs font-bold text-emerald-800">
-                      {cfgSavedMsg}
+                  {questionError && (
+                    <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-red-700 text-xs font-semibold flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 shrink-0" />
+                      {questionError}
                     </div>
                   )}
 
-                  <button
-                    type="submit"
-                    className="px-5 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold"
-                  >
-                    Guardar Configuración
-                  </button>
-                </form>
-              )}
-            </div>
-          </div>
+                  {/* Botón de calificación o bloque de retroalimentación socrática */}
+                  {!existingAnswer ? (
+                    <div className="flex justify-end">
+                      <button
+                        type="button"
+                        onClick={handleSubmitAnswer}
+                        className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-red-700 hover:bg-red-800 text-white font-bold text-sm shadow-xs transition"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        Confirmar y Calificar Decisión
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-4 pt-2">
+                      <div
+                        className={`p-4 rounded-xl border ${
+                          existingAnswer.isCorrect
+                            ? 'bg-emerald-50 border-emerald-300 text-emerald-950'
+                            : 'bg-red-50 border-red-300 text-red-950'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-1.5">
+                          <div className="flex items-center gap-2 font-extrabold text-sm">
+                            {existingAnswer.isCorrect ? (
+                              <>
+                                <CheckCircle2 className="w-5 h-5 text-emerald-600" />
+                                Decisión Correcta (+{existingAnswer.pointsEarned.toFixed(1)}{' '}
+                                pts)
+                              </>
+                            ) : (
+                              <>
+                                <XCircle className="w-5 h-5 text-red-600" />
+                                Decisión Incorrecta (0.0 pts · Clave:{' '}
+                                {currentQuestion.correctOption})
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-xs sm:text-sm leading-relaxed">
+                          <strong>Base normativa:</strong>{' '}
+                          {currentQuestion.rubric.normativeBasis}
+                        </p>
+                      </div>
+
+                      {/* Retroalimentación Socrática */}
+                      <div className="p-4 rounded-xl bg-blue-50 border border-blue-200 text-blue-950 space-y-1.5">
+                        <div className="flex items-center gap-2 text-xs font-extrabold uppercase tracking-wide text-blue-800">
+                          <HelpCircle className="w-4 h-4" />
+                          Retroalimentación Socrática sobre tu sustento
+                        </div>
+                        <p className="text-xs sm:text-sm leading-relaxed">
+                          {existingAnswer.socraticFeedback}
+                        </p>
+                      </div>
+
+                      {!isLastQuestionOfAll && (
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={handleNextStep}
+                            className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm transition"
+                          >
+                            Continuar a la siguiente pregunta
+                            <ArrowRight className="w-4 h-4" />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })()
         )}
       </main>
 
-      {/* PIE DE PÁGINA INSTITUCIONAL CON ACCESO DISCRETO PARA DOCENTES */}
-      <footer className="bg-white border-t border-slate-200 py-4 px-4 sm:px-6 mt-10">
-        <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+      {/* PIE DE PÁGINA CON ACCESO DISCRETO A VISTA DOCENTE */}
+      <footer className="bg-white border-t border-slate-200 py-4 px-4 sm:px-6 mt-12">
+        <div className="max-w-6xl mx-auto flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
           <div>
-            Ministerio de Desarrollo e Inclusión Social (MIDIS) — Oficina de Integridad
-            Institucional
+            {config.institutionName} · Taller: {config.workshopTitle}
           </div>
-          <div className="flex items-center gap-3">
-            <span>Taller Virtual de Integridad Pública</span>
+          <div className="flex items-center gap-4">
+            <span className="hidden sm:inline-flex items-center gap-1">
+              <Clock className="w-3.5 h-3.5" />
+              Registro automático de tiempos activo
+            </span>
             <button
               type="button"
-              onClick={triggerTeacherAccess}
+              onClick={() => {
+                if (viewMode === 'teacher') {
+                  setViewMode('participant');
+                } else {
+                  setLoginError('');
+                  setShowTeacherLoginModal(true);
+                }
+              }}
               className="text-slate-400 hover:text-slate-700 transition font-medium"
-              title="Acceso exclusivo para docentes y facilitadores (Alt + D)"
+              title="Acceso exclusivo para facilitadores (Alt + D)"
             >
               🔒 Docente
             </button>
@@ -2435,120 +2615,130 @@ export default function App() {
 
       {/* MODAL DE AUTENTICACIÓN DOCENTE */}
       {showTeacherLoginModal && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-sm w-full p-6">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-base font-extrabold text-slate-900">
-                Acceso Docente / Facilitador
-              </h3>
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-sm w-full p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-red-700" />
+                <h3 className="text-sm font-bold text-slate-900">
+                  Acceso Vista Docente
+                </h3>
+              </div>
               <button
                 type="button"
                 onClick={() => setShowTeacherLoginModal(false)}
-                className="text-slate-400 hover:text-slate-700 text-sm font-bold"
+                className="text-slate-400 hover:text-slate-700"
               >
-                ✕
+                <X className="w-4 h-4" />
               </button>
             </div>
-            <p className="text-xs text-slate-500 mb-4">
-              Ingrese sus credenciales institucionales para acceder al panel de seguimiento y
-              analítica de cohorte.
-            </p>
-            <form onSubmit={handleTeacherLoginSubmit} className="space-y-3">
+
+            <form onSubmit={handleTeacherLogin} className="space-y-3">
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Usuario</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Usuario
+                </label>
                 <input
                   type="text"
                   autoFocus
                   value={loginUser}
                   onChange={(e) => setLoginUser(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs font-bold text-slate-700 mb-1">Clave</label>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Contraseña
+                </label>
                 <input
                   type="password"
                   value={loginPass}
                   onChange={(e) => setLoginPass(e.target.value)}
-                  className="w-full px-3 py-2 text-sm rounded-lg border border-slate-300"
+                  className="w-full px-3 py-2 rounded-lg border border-slate-300 text-sm"
                 />
               </div>
-              {loginError && <p className="text-xs font-semibold text-rose-600">{loginError}</p>}
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowTeacherLoginModal(false)}
-                  className="px-3.5 py-2 rounded-lg text-xs font-semibold bg-slate-100 text-slate-700"
-                >
-                  Cancelar
-                </button>
-                <button
-                  type="submit"
-                  className="px-4 py-2 rounded-lg text-xs font-bold bg-slate-900 text-white"
-                >
-                  Ingresar
-                </button>
-              </div>
+
+              {loginError && (
+                <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-200 p-2.5 rounded-lg">
+                  {loginError}
+                </div>
+              )}
+
+              <button
+                type="submit"
+                className="w-full py-2.5 rounded-lg bg-red-700 hover:bg-red-800 text-white text-sm font-bold transition"
+              >
+                Ingresar al Panel Docente
+              </button>
             </form>
           </div>
         </div>
       )}
 
-      {/* MODAL DE INSPECCIÓN DETALLADA DE SUSTENTOS (VISTA DOCENTE) */}
-      {inspectedParticipant && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-2xl shadow-xl border border-slate-200 max-w-3xl w-full max-h-[85vh] flex flex-col">
-            <div className="p-5 border-b border-slate-200 flex items-center justify-between">
+      {/* MODAL DE DETALLE INDIVIDUAL EN VISTA DOCENTE */}
+      {selectedDetailParticipant && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl border border-slate-200 max-w-3xl w-full max-h-[88vh] flex flex-col shadow-xl">
+            <div className="p-4 border-b border-slate-200 flex items-center justify-between">
               <div>
-                <h3 className="text-base font-extrabold text-slate-900">
-                  Detalle de Respuestas y Sustentos — {inspectedParticipant.name}
+                <h3 className="text-base font-bold text-slate-900">
+                  {selectedDetailParticipant.fullName}
                 </h3>
                 <p className="text-xs text-slate-500">
-                  DNI: {inspectedParticipant.dni} • {inspectedParticipant.email}
+                  DNI: {selectedDetailParticipant.dni} · Ingreso:{' '}
+                  {formatTimestamp(selectedDetailParticipant.startedAt)} · Fin:{' '}
+                  {formatTimestamp(selectedDetailParticipant.completedAt)}
                 </p>
               </div>
               <button
                 type="button"
-                onClick={() => setInspectParticipantId(null)}
-                className="text-slate-400 hover:text-slate-700 font-bold text-sm"
+                onClick={() => setSelectedDetailParticipant(null)}
+                className="p-1.5 rounded-lg hover:bg-slate-100 text-slate-500"
               >
-                ✕
+                <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5 overflow-y-auto space-y-4 text-xs">
-              {CASES_DATA.flatMap((c) => c.questions).map((q) => {
-                const ans = inspectedParticipant.answers?.[q.id];
-                const ok = ans?.selected === q.correctOption;
-                return (
-                  <div
-                    key={q.id}
-                    className={`p-3.5 rounded-xl border ${
-                      !ans
-                        ? 'bg-slate-50 border-slate-200'
-                        : ok
-                        ? 'bg-emerald-50/50 border-emerald-200'
-                        : 'bg-rose-50/50 border-rose-200'
-                    }`}
-                  >
-                    <div className="flex justify-between font-bold text-slate-900 mb-1">
-                      <span>Pregunta {q.code}</span>
-                      <span>
-                        {!ans
-                          ? 'Sin responder'
-                          : ok
-                          ? `Correcta (${q.points.toFixed(1)} pts)`
-                          : `Incorrecta — Marcó ${ans.selected} (Clave: ${q.correctOption})`}
-                      </span>
-                    </div>
-                    <p className="text-slate-700 mb-2">{q.prompt}</p>
-                    {ans && (
-                      <div className="bg-white p-2.5 rounded border border-slate-200 text-slate-800">
-                        <strong>Sustento escrito:</strong> {ans.justification}
+
+            <div className="p-5 overflow-y-auto space-y-3 text-xs">
+              {Object.keys(selectedDetailParticipant.answers).length === 0 ? (
+                <p className="text-slate-500 text-center py-6">
+                  El participante aún no ha respondido ninguna pregunta.
+                </p>
+              ) : (
+                CASES_DATA.map((c) =>
+                  c.questions.map((q) => {
+                    const ans = selectedDetailParticipant.answers[q.id];
+                    if (!ans) return null;
+                    return (
+                      <div
+                        key={q.id}
+                        className="p-3.5 rounded-xl border border-slate-200 bg-slate-50 space-y-1.5"
+                      >
+                        <div className="flex justify-between font-bold text-slate-900">
+                          <span>
+                            Pregunta {q.number}: {q.title}
+                          </span>
+                          <span
+                            className={
+                              ans.isCorrect ? 'text-emerald-700' : 'text-red-700'
+                            }
+                          >
+                            Marcó {ans.selectedOption} ({ans.pointsEarned.toFixed(1)} /{' '}
+                            {q.points.toFixed(1)} pts)
+                          </span>
+                        </div>
+                        <p className="text-slate-700">
+                          <strong>Sustento:</strong> "{ans.justification}"
+                        </p>
+                        <p className="text-blue-900 bg-blue-50 p-2 rounded border border-blue-200">
+                          <Sparkles className="w-3.5 h-3.5 inline mr-1" />
+                          {ans.socraticFeedback}
+                        </p>
                       </div>
-                    )}
-                  </div>
-                );
-              })}
+                    );
+                  })
+                )
+              )}
             </div>
           </div>
         </div>
