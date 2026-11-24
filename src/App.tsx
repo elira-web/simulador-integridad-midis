@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ShieldCheck,
   UserCheck,
@@ -25,6 +25,8 @@ import {
   Check,
   Eye,
   X,
+  RefreshCw,
+  Database,
 } from 'lucide-react';
 
 // ============================================================================
@@ -95,6 +97,7 @@ interface AppConfig {
   customLogoDataUrl: string;
   teacherUsername: string;
   teacherPassword: string;
+  googleSheetsUrl: string;
 }
 
 // ============================================================================
@@ -119,9 +122,11 @@ const LEGACY_KEYS = [
 const DEFAULT_CONFIG: AppConfig = {
   workshopTitle: 'Integridad en la gestión pública para la entrega de servicios',
   institutionName: 'Ministerio de Desarrollo e Inclusión Social (MIDIS)',
-  customLogoDataUrl: '/logo-midis.png',
+  customLogoDataUrl: './logo-midis.png',
   teacherUsername: 'docente.midis',
   teacherPassword: 'Integridad2026',
+  // REEMPLAZA EL TEXTO ENTRE COMILLAS CON TU URL /exec DE GOOGLE APPS SCRIPT:
+  googleSheetsUrl: 'https://script.google.com/macros/s/AKfycbyeRNHGfIVNwAVlSj6IRuLusmsoMPx-JlFcWXRuo-vkd59SFmnPdCW2_5LgnUFYl4oL3A/exec',
 };
 
 // ============================================================================
@@ -143,6 +148,15 @@ const formatTimestamp = (iso?: string | null): string => {
       hour12: false,
     })
     .replace(',', '');
+};
+
+const isValidSheetsUrl = (url?: string): boolean => {
+  if (!url) return false;
+  const trimmed = url.trim();
+  return (
+    trimmed.startsWith('https://script.google.com/') &&
+    !trimmed.includes('PEGA_AQUI')
+  );
 };
 
 const analyzeJustificationSocratic = (
@@ -694,7 +708,121 @@ const CASES_DATA: CaseStudy[] = [
 ];
 
 // ============================================================================
-// SERVICIO DE PERSISTENCIA LOCAL
+// CÁLCULOS DE PUNTAJE Y SINCRONIZACIÓN CON GOOGLE SHEETS
+// ============================================================================
+
+const computeParticipantScores = (p: ParticipantRecord) => {
+  const answeredCount = Object.keys(p.answers).length;
+  const c1 = CASES_DATA[0].questions.reduce(
+    (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+    0
+  );
+  const c2 = CASES_DATA[1].questions.reduce(
+    (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+    0
+  );
+  const c3 = CASES_DATA[2].questions.reduce(
+    (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
+    0
+  );
+  const total = c1 + c2 + c3;
+  const level =
+    answeredCount < 12
+      ? 'En progreso'
+      : total >= 17
+      ? 'Sobresaliente'
+      : total >= 14
+      ? 'Aprobado'
+      : 'En proceso';
+
+  return { answeredCount, c1, c2, c3, total, level };
+};
+
+const syncParticipantToGoogleSheets = async (
+  participant: ParticipantRecord,
+  sheetsUrl: string
+): Promise<boolean> => {
+  if (!isValidSheetsUrl(sheetsUrl)) return false;
+
+  const { answeredCount, c1, c2, c3, total, level } = computeParticipantScores(participant);
+
+  const payload = {
+    action: 'upsert',
+    row: {
+      id: participant.id,
+      fullName: participant.fullName,
+      dni: participant.dni,
+      email: participant.email,
+      startedAtFormatted: formatTimestamp(participant.startedAt),
+      completedAtFormatted: participant.completedAt
+        ? formatTimestamp(participant.completedAt)
+        : 'En curso',
+      progress: `${answeredCount} / 12`,
+      status: answeredCount >= 12 ? 'Finalizado' : 'En curso',
+      case1: Number(c1.toFixed(1)),
+      case2: Number(c2.toFixed(1)),
+      case3: Number(c3.toFixed(1)),
+      total: Number(total.toFixed(1)),
+      level,
+      rawRecord: participant,
+    },
+  };
+
+  try {
+    await fetch(sheetsUrl.trim(), {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify(payload),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+const fetchCohortFromGoogleSheets = async (
+  sheetsUrl: string
+): Promise<ParticipantRecord[] | null> => {
+  if (!isValidSheetsUrl(sheetsUrl)) return null;
+
+  try {
+    const response = await fetch(sheetsUrl.trim(), {
+      method: 'GET',
+      cache: 'no-store',
+    });
+    if (!response.ok) return null;
+    const data = await response.json();
+    if (data && data.status === 'ok' && Array.isArray(data.records)) {
+      return data.records as ParticipantRecord[];
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
+const clearGoogleSheetsData = async (sheetsUrl: string): Promise<boolean> => {
+  if (!isValidSheetsUrl(sheetsUrl)) return false;
+  try {
+    await fetch(sheetsUrl.trim(), {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: {
+        'Content-Type': 'text/plain;charset=utf-8',
+      },
+      body: JSON.stringify({ action: 'clear' }),
+    });
+    return true;
+  } catch {
+    return false;
+  }
+};
+
+// ============================================================================
+// SERVICIO DE PERSISTENCIA LOCAL (RESPALDO INMEDIATO)
 // ============================================================================
 
 const storageService = {
@@ -745,7 +873,14 @@ const storageService = {
     try {
       const raw = localStorage.getItem(STORAGE_KEYS.CONFIG);
       if (!raw) return DEFAULT_CONFIG;
-      return { ...DEFAULT_CONFIG, ...JSON.parse(raw) };
+      const saved = JSON.parse(raw);
+      return {
+        ...DEFAULT_CONFIG,
+        ...saved,
+        googleSheetsUrl: isValidSheetsUrl(saved.googleSheetsUrl)
+          ? saved.googleSheetsUrl
+          : DEFAULT_CONFIG.googleSheetsUrl,
+      };
     } catch {
       return DEFAULT_CONFIG;
     }
@@ -771,7 +906,7 @@ const MidisLogoBadge: React.FC<{
   const candidates = useMemo(() => {
     const list: string[] = [];
     if (customUrl && customUrl.trim()) list.push(customUrl.trim());
-    ['/logo-midis.png', '/MIDIS.png', '/MIDIS (1).png'].forEach((path) => {
+    ['./logo-midis.png', '/logo-midis.png', './MIDIS.png'].forEach((path) => {
       if (!list.includes(path)) list.push(path);
     });
     return list;
@@ -822,37 +957,27 @@ const MidisLogoBadge: React.FC<{
         role="img"
         aria-label="Logo Oficial Ministerio de Desarrollo e Inclusión Social"
       >
-        {/* Bloque Escudo Nacional */}
         <rect x="0" y="2" width="96" height="96" fill="#FFFFFF" stroke="#E2E8F0" strokeWidth="1" />
-        {/* Corona cívica */}
         <ellipse cx="48" cy="18" rx="14" ry="7" fill="none" stroke="#15803D" strokeWidth="4" />
-        {/* Banderas laterales */}
         <polygon points="18,28 32,24 32,76 16,70" fill="#D91023" />
         <polygon points="22,28 28,26 28,74 21,71" fill="#FFFFFF" />
         <polygon points="78,28 64,24 64,76 80,70" fill="#D91023" />
         <polygon points="74,28 68,26 68,74 75,71" fill="#FFFFFF" />
-        {/* Blason central */}
         <path
           d="M28,28 H68 V56 C68,72 48,82 48,82 C48,82 28,72 28,56 Z"
           fill="#FFFFFF"
           stroke="#CA8A04"
           strokeWidth="2.5"
         />
-        {/* Campo Vicuña */}
         <rect x="30" y="30" width="18" height="22" fill="#38BDF8" />
         <ellipse cx="39" cy="43" rx="4" ry="6" fill="#B45309" />
-        {/* Campo Árbol de la Quina */}
         <rect x="48" y="30" width="18" height="22" fill="#FFFFFF" />
         <circle cx="57" cy="39" r="6" fill="#16A34A" />
         <rect x="56" y="43" width="2" height="7" fill="#78350F" />
-        {/* Campo Cornucopia */}
         <path d="M30,52 H66 V56 C66,69 48,79 48,79 C48,79 30,69 30,56 Z" fill="#DC2626" />
         <path d="M37,61 Q48,57 59,64 Q49,70 37,61 Z" fill="#FACC15" />
 
-        {/* Filete blanco */}
         <rect x="96" y="2" width="5" height="96" fill="#FFFFFF" />
-
-        {/* Bloque Rojo PERÚ */}
         <rect x="101" y="2" width="114" height="96" fill="#E30613" />
         <text
           x="158"
@@ -867,10 +992,7 @@ const MidisLogoBadge: React.FC<{
           PERÚ
         </text>
 
-        {/* Filete blanco */}
         <rect x="215" y="2" width="5" height="96" fill="#FFFFFF" />
-
-        {/* Bloque Gris Institucional MIDIS */}
         <rect x="220" y="2" width="298" height="96" fill="#575756" />
         <text
           x="238"
@@ -1068,17 +1190,69 @@ export default function App() {
   const [justificationText, setJustificationText] = useState('');
   const [questionError, setQuestionError] = useState('');
 
-  // Estados de Vista Docente
+  // Estados de Vista Docente y Google Sheets
   const [teacherTab, setTeacherTab] = useState<'cohort' | 'matrix' | 'settings'>('cohort');
   const [selectedDetailParticipant, setSelectedDetailParticipant] =
     useState<ParticipantRecord | null>(null);
   const [draftConfig, setDraftConfig] = useState<AppConfig>(config);
   const [configSavedNotice, setConfigSavedNotice] = useState('');
+  const [isSyncingSheets, setIsSyncingSheets] = useState(false);
+  const [sheetsSyncStatus, setSheetsSyncStatus] = useState<string>('');
+
+  const sheetsConnected = useMemo(
+    () => isValidSheetsUrl(config.googleSheetsUrl),
+    [config.googleSheetsUrl]
+  );
 
   const activeParticipant = useMemo(
     () => cohort.find((p) => p.id === activeParticipantId) || null,
     [cohort, activeParticipantId]
   );
+
+  // Sincronizar registros desde Google Sheets hacia Vista Docente
+  const handleRefreshFromGoogleSheets = useCallback(async () => {
+    if (!isValidSheetsUrl(config.googleSheetsUrl)) {
+      setSheetsSyncStatus('Configura la URL de Google Apps Script para sincronizar.');
+      return;
+    }
+    setIsSyncingSheets(true);
+    setSheetsSyncStatus('Consultando Google Sheets...');
+    const remoteRecords = await fetchCohortFromGoogleSheets(config.googleSheetsUrl);
+    if (remoteRecords) {
+      setCohort((prevLocal) => {
+        const mergedMap = new Map<string, ParticipantRecord>();
+        prevLocal.forEach((p) => mergedMap.set(p.id, p));
+        remoteRecords.forEach((remote) => {
+          const existing = mergedMap.get(remote.id);
+          if (
+            !existing ||
+            Object.keys(remote.answers || {}).length >=
+              Object.keys(existing.answers || {}).length
+          ) {
+            mergedMap.set(remote.id, remote);
+          }
+        });
+        const mergedList = Array.from(mergedMap.values()).sort((a, b) =>
+          b.startedAt.localeCompare(a.startedAt)
+        );
+        storageService.saveCohort(mergedList);
+        return mergedList;
+      });
+      setSheetsSyncStatus(
+        `Sincronizado con Google Sheets (${formatTimestamp(new Date().toISOString())})`
+      );
+    } else {
+      setSheetsSyncStatus('No se pudo leer Google Sheets. Verifica el permiso "Cualquier persona".');
+    }
+    setIsSyncingSheets(false);
+  }, [config.googleSheetsUrl]);
+
+  // Al entrar a Vista Docente, descargar automáticamente los registros de Google Sheets
+  useEffect(() => {
+    if (viewMode === 'teacher' && sheetsConnected) {
+      handleRefreshFromGoogleSheets();
+    }
+  }, [viewMode, sheetsConnected, handleRefreshFromGoogleSheets]);
 
   // Atajo de teclado discreto Alt + D para abrir acceso docente
   useEffect(() => {
@@ -1163,6 +1337,9 @@ export default function App() {
     setCohort(updatedCohort);
     storageService.saveCohort(updatedCohort);
 
+    // Registrar inmediatamente el ingreso en Google Sheets
+    void syncParticipantToGoogleSheets(newParticipant, config.googleSheetsUrl);
+
     setActiveParticipantId(newParticipant.id);
     storageService.saveActiveId(newParticipant.id);
 
@@ -1233,6 +1410,10 @@ export default function App() {
     );
     setCohort(updatedCohort);
     storageService.saveCohort(updatedCohort);
+
+    // Actualizar progreso y puntaje en vivo en Google Sheets
+    void syncParticipantToGoogleSheets(updatedParticipant, config.googleSheetsUrl);
+
     setQuestionError('');
   };
 
@@ -1294,9 +1475,9 @@ export default function App() {
     }
   };
 
-  const handleResetPlatform = () => {
+  const handleResetPlatform = async () => {
     const confirmed = window.confirm(
-      '¿Confirmas reiniciar la plataforma? Se eliminarán todos los registros de participantes almacenados en este navegador y la tabla quedará en 0.'
+      '¿Confirmas reiniciar la plataforma? Se eliminarán los registros locales y de Google Sheets para dejar la tabla en 0.'
     );
     if (!confirmed) return;
 
@@ -1306,6 +1487,11 @@ export default function App() {
     setCohort([]);
     setActiveParticipantId(null);
     setSelectedDetailParticipant(null);
+
+    if (sheetsConnected) {
+      await clearGoogleSheetsData(config.googleSheetsUrl);
+      setSheetsSyncStatus('Registros reiniciados en navegador y Google Sheets.');
+    }
   };
 
   const handleLoadDemoExamples = () => {
@@ -1366,6 +1552,11 @@ export default function App() {
     const updated = [demo1, demo2, ...cohort];
     setCohort(updated);
     storageService.saveCohort(updated);
+
+    if (sheetsConnected) {
+      void syncParticipantToGoogleSheets(demo1, config.googleSheetsUrl);
+      void syncParticipantToGoogleSheets(demo2, config.googleSheetsUrl);
+    }
   };
 
   const exportCohortCSV = () => {
@@ -1393,28 +1584,7 @@ export default function App() {
     };
 
     const rows = cohort.map((p) => {
-      const answeredCount = Object.keys(p.answers).length;
-      const c1 = CASES_DATA[0].questions.reduce(
-        (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
-        0
-      );
-      const c2 = CASES_DATA[1].questions.reduce(
-        (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
-        0
-      );
-      const c3 = CASES_DATA[2].questions.reduce(
-        (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
-        0
-      );
-      const total = c1 + c2 + c3;
-      const level =
-        answeredCount < 12
-          ? 'En progreso'
-          : total >= 17
-          ? 'Sobresaliente'
-          : total >= 14
-          ? 'Aprobado'
-          : 'En proceso';
+      const { answeredCount, c1, c2, c3, total, level } = computeParticipantScores(p);
 
       return [
         p.fullName,
@@ -1479,7 +1649,7 @@ export default function App() {
     setConfig(draftConfig);
     setConfigSavedNotice(
       ok
-        ? 'Configuración guardada correctamente en este navegador.'
+        ? 'Configuración guardada correctamente.'
         : 'Configuración aplicada en la sesión actual.'
     );
     setTimeout(() => setConfigSavedNotice(''), 4000);
@@ -1557,7 +1727,7 @@ export default function App() {
             {viewMode === 'teacher' ? (
               <div className="flex items-center gap-2">
                 <span className="px-2.5 py-1 rounded-full bg-slate-800 text-white text-xs font-bold">
-                  Vista Docente · v3.1
+                  Vista Docente · v3.2
                 </span>
                 <button
                   type="button"
@@ -1610,16 +1780,28 @@ export default function App() {
           <div className="space-y-6">
             <div className="flex flex-wrap items-center justify-between gap-4 bg-white p-5 rounded-xl border border-slate-200 shadow-xs">
               <div>
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <h2 className="text-xl font-bold text-slate-900">
                     Panel de Gestión Docente y Seguimiento
                   </h2>
                   <span className="px-2 py-0.5 text-[11px] font-bold bg-emerald-100 text-emerald-800 rounded-md">
-                    v3.1
+                    v3.2
+                  </span>
+                  <span
+                    className={`inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full ${
+                      sheetsConnected
+                        ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                        : 'bg-amber-50 text-amber-800 border border-amber-200'
+                    }`}
+                  >
+                    <Database className="w-3 h-3" />
+                    {sheetsConnected
+                      ? 'Google Sheets Conectado'
+                      : 'Google Sheets sin configurar'}
                   </span>
                 </div>
                 <p className="text-sm text-slate-600 mt-0.5">
-                  Monitoreo en tiempo real de calificaciones, marcas de tiempo (ingreso/fin) y exportación de resultados.
+                  Monitoreo centralizado en Google Sheets y exportación directa de resultados del taller.
                 </p>
               </div>
 
@@ -1661,7 +1843,7 @@ export default function App() {
                   }`}
                 >
                   <Settings className="w-4 h-4" />
-                  Configuración Institucional y Marca
+                  Configuración y Google Sheets
                 </button>
               </div>
             </div>
@@ -1714,11 +1896,23 @@ export default function App() {
                         Resultados por Participante ({cohort.length})
                       </h3>
                       <p className="text-xs text-slate-500">
-                        Incluye hora exacta de ingreso al formulario y hora de culminación de las 12 preguntas.
+                        {sheetsSyncStatus ||
+                          'Sincronizado con Google Sheets y respaldo local.'}
                       </p>
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleRefreshFromGoogleSheets}
+                        disabled={isSyncingSheets}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-blue-700 hover:bg-blue-800 disabled:opacity-50 text-white text-xs font-bold transition"
+                      >
+                        <RefreshCw
+                          className={`w-3.5 h-3.5 ${isSyncingSheets ? 'animate-spin' : ''}`}
+                        />
+                        {isSyncingSheets ? 'Sincronizando...' : 'Sincronizar Sheets'}
+                      </button>
                       <button
                         type="button"
                         onClick={exportCohortCSV}
@@ -1734,7 +1928,7 @@ export default function App() {
                         className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold transition"
                       >
                         <Users className="w-3.5 h-3.5" />
-                        Cargar Demo (2 ejemplos)
+                        Cargar Demo
                       </button>
                       <button
                         type="button"
@@ -1769,25 +1963,13 @@ export default function App() {
                               colSpan={9}
                               className="py-10 px-4 text-center text-slate-500 text-sm"
                             >
-                              No hay participantes registrados en este navegador todavía. Los registros aparecerán aquí automáticamente conforme completen el formulario de ingreso.
+                              No hay participantes registrados todavía. Conforme completen el formulario de ingreso, sus filas aparecerán en Google Sheets y aquí al sincronizar.
                             </td>
                           </tr>
                         ) : (
                           cohort.map((p) => {
-                            const answeredCount = Object.keys(p.answers).length;
-                            const c1 = CASES_DATA[0].questions.reduce(
-                              (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
-                              0
-                            );
-                            const c2 = CASES_DATA[1].questions.reduce(
-                              (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
-                              0
-                            );
-                            const c3 = CASES_DATA[2].questions.reduce(
-                              (s, q) => s + (p.answers[q.id]?.pointsEarned || 0),
-                              0
-                            );
-                            const total = c1 + c2 + c3;
+                            const { answeredCount, c1, c2, c3, total } =
+                              computeParticipantScores(p);
 
                             return (
                               <tr key={p.id} className="hover:bg-slate-50">
@@ -1912,15 +2094,34 @@ export default function App() {
               </div>
             )}
 
-            {/* PESTAÑA DOCENTE 3: CONFIGURACIÓN INSTITUCIONAL Y MARCA */}
+            {/* PESTAÑA DOCENTE 3: CONFIGURACIÓN INSTITUCIONAL Y GOOGLE SHEETS */}
             {teacherTab === 'settings' && (
               <form
                 onSubmit={handleSaveConfig}
                 className="bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-5 max-w-2xl"
               >
                 <h3 className="text-base font-bold text-slate-900 border-b border-slate-200 pb-3">
-                  Personalización Institucional y Credenciales Docentes
+                  Conexión con Google Sheets y Personalización Institucional
                 </h3>
+
+                <div className="p-4 rounded-xl bg-blue-50/70 border border-blue-200 space-y-2">
+                  <label className="flex items-center gap-1.5 text-xs font-bold text-blue-950">
+                    <Database className="w-4 h-4 text-blue-700" />
+                    URL de Aplicación Web de Google Apps Script (/exec)
+                  </label>
+                  <input
+                    type="url"
+                    placeholder="https://script.google.com/macros/s/.../exec"
+                    value={draftConfig.googleSheetsUrl}
+                    onChange={(e) =>
+                      setDraftConfig({ ...draftConfig, googleSheetsUrl: e.target.value })
+                    }
+                    className="w-full px-3 py-2 border border-blue-300 bg-white rounded-lg text-xs font-mono"
+                  />
+                  <p className="text-[11px] text-blue-900">
+                    Para que todos los participantes envíen sus respuestas desde sus propios equipos, guarda también esta URL en la constante <code>DEFAULT_CONFIG.googleSheetsUrl</code> de <code>src/App.tsx</code> en GitHub.
+                  </p>
+                </div>
 
                 <div>
                   <label className="block text-xs font-bold text-slate-700 mb-1">
@@ -1973,7 +2174,7 @@ export default function App() {
                       onClick={() =>
                         setDraftConfig({
                           ...draftConfig,
-                          customLogoDataUrl: '/logo-midis.png',
+                          customLogoDataUrl: './logo-midis.png',
                         })
                       }
                       className="px-3 py-2 rounded-lg border border-slate-300 bg-white hover:bg-slate-100 text-xs font-semibold text-slate-700"
@@ -2091,7 +2292,7 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Reglas del Simulador (2 reglas simplificadas) */}
+                {/* Reglas del Simulador */}
                 <div className="border-t border-slate-200 pt-5 space-y-3">
                   <h3 className="text-sm font-bold text-slate-900 flex items-center gap-2">
                     <FileText className="w-4 h-4 text-red-700" />
@@ -2125,7 +2326,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Columna Derecha: Formulario de Identificación Simplificado */}
+            {/* Columna Derecha: Formulario de Identificación */}
             <div className="lg:col-span-5">
               <form
                 onSubmit={handleStartSimulator}
@@ -2318,7 +2519,7 @@ export default function App() {
 
             return (
               <div className="space-y-6">
-                {/* Barra de progreso de casos (bloqueo secuencial visual) */}
+                {/* Barra de progreso de casos */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                   {CASES_DATA.map((c, idx) => {
                     const isCurrent = idx === activeCaseIndex;
@@ -2359,7 +2560,7 @@ export default function App() {
                   })}
                 </div>
 
-                {/* Expediente del Caso Actual (sin pistas normativas) */}
+                {/* Expediente del Caso Actual */}
                 <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-xs space-y-4">
                   <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-200 pb-3">
                     <div>
@@ -2441,8 +2642,7 @@ export default function App() {
                           cardStyle =
                             'border-emerald-600 bg-emerald-50 text-emerald-950 font-medium';
                         } else if (isWrongPicked) {
-                          cardStyle =
-                            'border-red-500 bg-red-50 text-red-950';
+                          cardStyle = 'border-red-500 bg-red-50 text-red-950';
                         } else {
                           cardStyle = 'border-slate-200 bg-slate-50 text-slate-500';
                         }
@@ -2589,7 +2789,9 @@ export default function App() {
           <div className="flex items-center gap-4">
             <span className="hidden sm:inline-flex items-center gap-1">
               <Clock className="w-3.5 h-3.5" />
-              Registro automático de tiempos activo
+              {sheetsConnected
+                ? 'Sincronización con Google Sheets activa'
+                : 'Registro automático de tiempos activo'}
             </span>
             <button
               type="button"
