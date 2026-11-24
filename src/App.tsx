@@ -124,9 +124,6 @@ const DEFAULT_CONFIG: AppConfig = {
   teacherPassword: 'Integridad2026',
 };
 
-// Inicia siempre vacío (0 registros ficticios por defecto)
-const DEMO_COHORT: ParticipantRecord[] = [];
-
 // ============================================================================
 // UTILIDADES DE FORMATO Y ANÁLISIS SOCRÁTICO
 // ============================================================================
