@@ -1481,7 +1481,7 @@ export default function App() {
         if (Array.isArray(parsed)) {
           return parsed
             .map(normalizeParticipantRecord)
-            .filter((item): item is ParticipantRecord => item !== null);
+            .filter((item: ParticipantRecord | null): item is ParticipantRecord => item !== null);
         }
       }
     } catch {
@@ -1722,7 +1722,7 @@ export default function App() {
       if (data && data.status === 'ok' && rawList !== null) {
         const remoteRecords = rawList
           .map(normalizeParticipantRecord)
-          .filter((item): item is ParticipantRecord => item !== null);
+          .filter((item: ParticipantRecord | null): item is ParticipantRecord => item !== null);
 
         setCohort((prevLocal) => {
           const mergedMap = new Map<string, ParticipantRecord>();
