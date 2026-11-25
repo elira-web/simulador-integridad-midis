@@ -115,7 +115,7 @@ interface AppConfig {
 }
 
 // ============================================================================
-// CONFIGURACIÓN INICIAL (URL ACTIVA DE GOOGLE APPS SCRIPT FIJADA EN v5.0)
+// CONFIGURACIÓN INICIAL (URL ACTIVA DE GOOGLE APPS SCRIPT FIJADA EN v5.0.1)
 // ============================================================================
 
 const STORAGE_KEYS = {
@@ -761,7 +761,6 @@ const computePerformanceLevel = (score: number): string => {
   return 'Inicial (Atención Prioritaria en Integridad)';
 };
 
-// Normalizador estricto para blindar la Vista Docente contra registros incompletos o null de Google Sheets
 const normalizeParticipantRecord = (raw: unknown): ParticipantRecord | null => {
   if (!raw || typeof raw !== 'object') return null;
 
@@ -892,25 +891,23 @@ const encodeWinAnsiBytes = (text: string): number[] => {
   for (let i = 0; i < text.length; i++) {
     const code = text.charCodeAt(i);
     if (code === 0x28 || code === 0x29 || code === 0x5c) {
-      // Escapar '(', ')' y '\' dentro de cadenas PDF
       bytes.push(0x5c, code);
     } else if (code >= 0x20 && code <= 0x7e) {
       bytes.push(code);
     } else if (code >= 0xa0 && code <= 0xff) {
-      // Caracteres españoles (á, é, í, ó, ú, ñ, ü, ¿, ¡, °, etc.) coinciden en WinAnsiEncoding
       bytes.push(code);
     } else if (code === 0x2014) {
-      bytes.push(0x97); // em-dash
+      bytes.push(0x97);
     } else if (code === 0x2013) {
-      bytes.push(0x96); // en-dash
+      bytes.push(0x96);
     } else if (code === 0x201c || code === 0x201d) {
-      bytes.push(0x22); // comillas dobles
+      bytes.push(0x22);
     } else if (code === 0x2018 || code === 0x2019) {
-      bytes.push(0x27); // comilla simple
+      bytes.push(0x27);
     } else if (code === 0x2022) {
-      bytes.push(0x95); // viñeta
+      bytes.push(0x95);
     } else {
-      bytes.push(0x3f); // '?'
+      bytes.push(0x3f);
     }
   }
   return bytes;
@@ -941,7 +938,7 @@ const downloadDirectPdfReport = (
   participant: ParticipantRecord,
   config: AppConfig
 ): void => {
-  const pageWidth = 595.28; // A4 pts
+  const pageWidth = 595.28;
   const pageHeight = 841.89;
   const marginX = 44;
   const contentWidth = pageWidth - marginX * 2;
@@ -1016,26 +1013,21 @@ const downloadDirectPdfReport = (
     }
   };
 
-  // --- CABECERA INSTITUCIONAL MIDIS (BLOQUE BLANCO + ROJO PERÚ + GRIS MIDIS) ---
   const bannerHeight = 36;
   const bannerY = currentY - bannerHeight + 10;
 
-  // Bloque blanco izquierdo (República del Perú)
   pushOps(`0.98 0.98 0.99 rg ${marginX} ${bannerY} 72 ${bannerHeight} re f`);
   pushOps(`0.75 0.78 0.82 RG 0.6 w ${marginX} ${bannerY} 72 ${bannerHeight} re S`);
   pushTextOp('REPUBLICA', marginX + 13, bannerY + 21, 'F2', 7.2, [0.1, 0.13, 0.18]);
   pushTextOp('DEL PERU', marginX + 16, bannerY + 11, 'F2', 7.2, [0.1, 0.13, 0.18]);
 
-  // Bloque rojo central (PERÚ)
   pushOps(`0.851 0.063 0.137 rg ${marginX + 72} ${bannerY} 54 ${bannerHeight} re f`);
   pushTextOp('PERÚ', marginX + 83, bannerY + 13, 'F2', 12.5, [1, 1, 1]);
 
-  // Bloque gris institucional (Ministerio de Desarrollo e Inclusión Social)
   pushOps(`0.341 0.341 0.337 rg ${marginX + 126} ${bannerY} 144 ${bannerHeight} re f`);
   pushTextOp('Ministerio de Desarrollo', marginX + 134, bannerY + 21, 'F2', 8.5, [1, 1, 1]);
   pushTextOp('e Inclusión Social', marginX + 134, bannerY + 10, 'F2', 8.5, [1, 1, 1]);
 
-  // Título a la derecha del emblema
   pushTextOp('TALLER VIRTUAL DE INTEGRIDAD PÚBLICA', marginX + 282, bannerY + 23, 'F2', 8.2, [0.75, 0.08, 0.15]);
   const titleLines = wrapPdfLine(config.workshopTitle, 42);
   titleLines.slice(0, 2).forEach((tLine, idx) => {
@@ -1043,11 +1035,9 @@ const downloadDirectPdfReport = (
   });
 
   currentY = bannerY - 12;
-  // Línea roja separadora
   pushOps(`0.851 0.063 0.137 RG 1.5 w ${marginX} ${currentY} m ${pageWidth - marginX} ${currentY} l S`);
   currentY -= 18;
 
-  // --- FICHA DE RESULTADOS DEL PARTICIPANTE ---
   const cardHeight = 86;
   const cardY = currentY - cardHeight + 8;
   pushOps(`0.97 0.98 0.99 rg ${marginX} ${cardY} ${contentWidth} ${cardHeight} re f`);
@@ -1077,7 +1067,6 @@ const downloadDirectPdfReport = (
 
   currentY = cardY - 14;
 
-  // Resumen por casos
   pushTextOp(
     `Desglose por Caso:   Caso 1: ${participant.case1Score.toFixed(1)} / 6.5 pts   |   Caso 2: ${participant.case2Score.toFixed(1)} / 6.5 pts   |   Caso 3: ${participant.case3Score.toFixed(1)} / 7.0 pts`,
     marginX,
@@ -1088,7 +1077,6 @@ const downloadDirectPdfReport = (
   );
   currentY -= 18;
 
-  // --- DETALLE DE LAS 12 PREGUNTAS POR CASO ---
   for (const scenario of CASES_DATA) {
     ensureSpace(34);
     const headerBarY = currentY - 14;
@@ -1161,7 +1149,6 @@ const downloadDirectPdfReport = (
     }
   }
 
-  // --- COMPROMISOS Y PLAN DE ACCIÓN TERRITORIAL ---
   ensureSpace(88);
   currentY -= 4;
   pushTextOp(
@@ -1190,7 +1177,6 @@ const downloadDirectPdfReport = (
     currentY -= 2;
   }
 
-  // Numeración de pie de página en cada hoja
   const totalPages = pagesOps.length;
   pagesOps.forEach((_, idx) => {
     const target = pagesOps[idx];
@@ -1203,7 +1189,6 @@ const downloadDirectPdfReport = (
     for (let i = 0; i < suffix.length; i++) target.push(suffix.charCodeAt(i) & 0xff);
   });
 
-  // --- ENSAMBLAJE BINARIO PDF 1.4 CON TABLA XREF EXACTA ---
   const pdfBytes: number[] = [];
   const appendAscii = (s: string) => {
     for (let i = 0; i < s.length; i++) pdfBytes.push(s.charCodeAt(i) & 0xff);
@@ -1213,25 +1198,22 @@ const downloadDirectPdfReport = (
   };
 
   appendAscii('%PDF-1.4\n');
-  const offsets: number[] = [0]; // Índice 0 reservado
+  const offsets: number[] = [0];
 
   const startObj = (objNum: number) => {
     offsets[objNum] = pdfBytes.length;
     appendAscii(`${objNum} 0 obj\n`);
   };
 
-  // Obj 1: Catalog
   startObj(1);
   appendAscii('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
 
-  // Obj 3 & 4: Fuentes estándar WinAnsiEncoding (soporta tildes y ñ)
   startObj(3);
   appendAscii('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n');
 
   startObj(4);
   appendAscii('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n');
 
-  // Objetos de páginas y flujos de contenido
   const pageObjNumbers: number[] = [];
   let nextObjNum = 5;
 
@@ -1251,13 +1233,11 @@ const downloadDirectPdfReport = (
     appendAscii('\nendstream\nendobj\n');
   }
 
-  // Obj 2: Pages root
   startObj(2);
   appendAscii(
     `<< /Type /Pages /Kids [${pageObjNumbers.map((n) => `${n} 0 R`).join(' ')}] /Count ${pageObjNumbers.length} >>\nendobj\n`
   );
 
-  // Tabla xref
   const xrefStart = pdfBytes.length;
   appendAscii(`xref\n0 ${nextObjNum}\n`);
   appendAscii('0000000000 65535 f \n');
@@ -1443,11 +1423,10 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
 };
 
 // ============================================================================
-// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.0)
+// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.0.1)
 // ============================================================================
 
 export default function App() {
-  // Configuración institucional y URL activa /exec fijada
   const [config, setConfig] = useState<AppConfig>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CONFIG);
@@ -1470,7 +1449,6 @@ export default function App() {
     return DEFAULT_CONFIG;
   });
 
-  // Cohorte local normalizada (inicia limpia en 0 participantes)
   const [cohort, setCohort] = useState<ParticipantRecord[]>(() => {
     try {
       const saved =
@@ -1490,7 +1468,6 @@ export default function App() {
     return [];
   });
 
-  // Sesión activa del participante
   const [activeSession, setActiveSession] = useState<ParticipantRecord | null>(() => {
     try {
       const saved =
@@ -1505,14 +1482,12 @@ export default function App() {
     return null;
   });
 
-  // Formulario de ingreso del participante
   const [fullName, setFullName] = useState('');
   const [dni, setDni] = useState('');
   const [email, setEmail] = useState('');
   const [consent, setConsent] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // Navegación del simulador (12 preguntas secuenciales)
   const allQuestions = useMemo(() => CASES_DATA.flatMap((c) => c.questions), []);
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(() => {
@@ -1528,12 +1503,10 @@ export default function App() {
   const [isGrading, setIsGrading] = useState(false);
   const [showIntegralReportModal, setShowIntegralReportModal] = useState(false);
 
-  // Cuenta regresiva automática de 10 segundos tras descargar el PDF final
   const [closingCountdown, setClosingCountdown] = useState<number | null>(null);
 
   const feedbackPanelRef = useRef<HTMLDivElement | null>(null);
 
-  // Estados de Vista Docente y sincronización sin bucles con Google Sheets
   const [isTeacherLoginOpen, setIsTeacherLoginOpen] = useState(false);
   const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState(false);
   const [loginUserInput, setLoginUserInput] = useState('');
@@ -1556,7 +1529,6 @@ export default function App() {
     return url.startsWith('https://') && !url.includes('PEGA_AQUI_TU_URL');
   }, [config.googleSheetsUrl]);
 
-  // Persistencia en localStorage
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEYS.CONFIG, JSON.stringify(config));
@@ -1585,7 +1557,6 @@ export default function App() {
     }
   }, [activeSession]);
 
-  // Temporizador de 10 segundos tras descargar el PDF: intenta cerrar pestaña y si el navegador bloquea, regresa al simulador
   useEffect(() => {
     if (closingCountdown === null) return;
 
@@ -1596,7 +1567,6 @@ export default function App() {
       } catch {
         // Bloqueado por política de seguridad del navegador
       }
-      // Regresa limpiamente al simulador
       setShowIntegralReportModal(false);
       return;
     }
@@ -1608,7 +1578,6 @@ export default function App() {
     return () => window.clearTimeout(timer);
   }, [closingCountdown]);
 
-  // Atajo discreto de teclado Alt + D para abrir acceso docente
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.altKey && (e.key === 'd' || e.key === 'D')) {
@@ -1624,7 +1593,6 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isTeacherAuthenticated]);
 
-  // Sincronizar selección y sustento cuando cambia la pregunta activa
   const currentQuestion = allQuestions[currentQuestionIndex] || allQuestions[0];
   const currentCase = CASES_DATA.find((c) => c.id === currentQuestion.caseId) || CASES_DATA[0];
   const existingAnswer = activeSession ? activeSession.answers[currentQuestion.id] : undefined;
@@ -1677,7 +1645,7 @@ export default function App() {
         signal: controller.signal,
       });
     } catch {
-      // Respaldo silencioso: los datos siguen guardados en localStorage
+      // Respaldo silencioso
     } finally {
       window.clearTimeout(timeoutId);
     }
@@ -1907,7 +1875,6 @@ export default function App() {
     }
   };
 
-  // Descarga directa en PC e inicio de contador automático de 10 segundos al finalizar
   const handleDownloadDirectPdf = (record: ParticipantRecord, startAutoCloseCountdown = false) => {
     downloadDirectPdfReport(record, config);
     if (startAutoCloseCountdown) {
@@ -2081,7 +2048,7 @@ export default function App() {
   };
 
   // ============================================================================
-  // RENDERIZADO: VISTA DOCENTE (CON ESCUDO ERROR BOUNDARY)
+  // RENDERIZADO: VISTA DOCENTE
   // ============================================================================
 
   if (isTeacherAuthenticated) {
@@ -2097,7 +2064,6 @@ export default function App() {
     return (
       <TeacherErrorBoundary onExit={() => setIsTeacherAuthenticated(false)}>
         <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col">
-          {/* Cabecera Vista Docente */}
           <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-30">
             <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
               <div className="flex items-center gap-3">
@@ -2172,7 +2138,6 @@ export default function App() {
           <main className="max-w-7xl w-full mx-auto px-4 py-6 flex-1">
             {teacherTab === 'resultados' ? (
               <div className="space-y-6">
-                {/* Tarjetas resumen */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
                     <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
@@ -2216,7 +2181,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Barra de acciones docentes */}
                 <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
                     <button
@@ -2258,7 +2222,6 @@ export default function App() {
                   </div>
                 </div>
 
-                {/* Tabla de Resultados por Participante */}
                 <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
                   <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
                     <h2 className="font-bold text-slate-900 text-sm sm:text-base">
@@ -2359,7 +2322,6 @@ export default function App() {
                 </div>
               </div>
             ) : (
-              /* Pestaña Configuración Institucional y Marca */
               <div className="max-w-3xl mx-auto bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
                 <div>
                   <h2 className="text-lg font-bold text-slate-900">
@@ -2473,7 +2435,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Cabecera Institucional (sin pestaña/botón "Cambiar participante") */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-2xs">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -2513,10 +2474,8 @@ export default function App() {
         </div>
       </header>
 
-      {/* Contenido Principal */}
       <main className="max-w-6xl w-full mx-auto px-4 py-6 flex-1">
         {!activeSession ? (
-          /* Pantalla de Identificación del Participante */
           <div className="max-w-2xl mx-auto space-y-6">
             <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs">
               <div className="flex items-center gap-2 text-red-700 text-xs font-bold uppercase tracking-wider mb-2">
@@ -2634,9 +2593,7 @@ export default function App() {
             </div>
           </div>
         ) : (
-          /* Pantalla Activa del Simulador */
           <div className="space-y-6">
-            {/* Barra de progreso secuencial */}
             <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
               <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
                 <div className="text-xs font-bold text-slate-700">
@@ -2685,7 +2642,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Tarjeta del Escenario del Caso */}
             <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                 <div>
@@ -2708,7 +2664,6 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Pregunta Actual, Alternativas, Sustento y Retroalimentación */}
             <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -2728,7 +2683,6 @@ export default function App() {
                 {currentQuestion.prompt}
               </h3>
 
-              {/* Opciones A, B, C, D */}
               <div className="space-y-2.5">
                 {currentQuestion.options.map((opt) => {
                   const isSelected = selectedOption === opt.id;
@@ -2782,7 +2736,6 @@ export default function App() {
                 })}
               </div>
 
-              {/* Campo obligatorio de sustento técnico-normativo */}
               <div className="space-y-1.5">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <label className="text-xs font-bold text-slate-800">
@@ -2806,7 +2759,6 @@ export default function App() {
                 />
               </div>
 
-              {/* Botón de calificación (antes de responder) */}
               {!existingAnswer && (
                 <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
                   <button
@@ -2840,7 +2792,6 @@ export default function App() {
                 </div>
               )}
 
-              {/* Panel de Retroalimentación Socrática y Normativa + Botón Siguiente Pregunta */}
               {existingAnswer && (
                 <div
                   ref={feedbackPanelRef}
@@ -2935,7 +2886,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Modal de Reporte Integral con descarga directa en PC y cuenta regresiva de 10s */}
       {showIntegralReportModal && activeSession && (
         <div className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
@@ -2972,7 +2922,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Barra de cuenta regresiva automática tras descargar PDF */}
             {closingCountdown !== null && (
               <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 space-y-2">
                 <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
@@ -3021,7 +2970,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Modal discreto de autenticación docente */}
       {isTeacherLoginOpen && (
         <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full p-6 shadow-xl border border-slate-200 space-y-4">
@@ -3090,7 +3038,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Pie de página institucional con acceso discreto para docentes */}
       <footer className="bg-white border-t border-slate-200 mt-8">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
           <div className="flex items-center gap-1.5">
