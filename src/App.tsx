@@ -749,8 +749,8 @@ const countValidSpanishWords = (text: string): number => {
   const tokens = text
     .trim()
     .split(/\s+/)
-    .map((t) => t.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g, ''))
-    .filter((t) => t.length >= 2 && /[aeiouáéíóúAEIOUÁÉÍÓÚ]/.test(t));
+    .map((t: string) => t.replace(/[^a-zA-ZáéíóúÁÉÍÓÚñÑüÜ]/g, ''))
+    .filter((t: string) => t.length >= 2 && /[aeiouáéíóúAEIOUÁÉÍÓÚ]/.test(t));
   return tokens.length;
 };
 
@@ -768,7 +768,7 @@ const normalizeParticipantRecord = (raw: unknown): ParticipantRecord | null => {
     'rawRecord' in raw &&
     (raw as { rawRecord?: unknown }).rawRecord &&
     typeof (raw as { rawRecord?: unknown }).rawRecord === 'object'
-      ? ((raw as { rawRecord: Record<string, unknown> }).rawRecord)
+      ? (raw as { rawRecord: Record<string, unknown> }).rawRecord
       : (raw as Record<string, unknown>);
 
   const id = String(candidate.id ?? '').trim();
@@ -852,7 +852,7 @@ const evaluateSocraticFeedback = (
   const pointsEarned = isCorrect ? question.points : 0;
   const lowerJust = justification.toLowerCase();
 
-  const matchedConcepts = question.rubric.expectedConcepts.filter((c) =>
+  const matchedConcepts = question.rubric.expectedConcepts.filter((c: string) =>
     lowerJust.includes(c.toLowerCase())
   );
 
@@ -1030,7 +1030,7 @@ const downloadDirectPdfReport = (
 
   pushTextOp('TALLER VIRTUAL DE INTEGRIDAD PÚBLICA', marginX + 282, bannerY + 23, 'F2', 8.2, [0.75, 0.08, 0.15]);
   const titleLines = wrapPdfLine(config.workshopTitle, 42);
-  titleLines.slice(0, 2).forEach((tLine, idx) => {
+  titleLines.slice(0, 2).forEach((tLine: string, idx: number) => {
     pushTextOp(tLine, marginX + 282, bannerY + 12 - idx * 10, 'F2', 8.5, [0.08, 0.11, 0.17]);
   });
 
@@ -1178,7 +1178,7 @@ const downloadDirectPdfReport = (
   }
 
   const totalPages = pagesOps.length;
-  pagesOps.forEach((_, idx) => {
+  pagesOps.forEach((_: number[], idx: number) => {
     const target = pagesOps[idx];
     const footerStr = `${config.institutionName} - Reporte Oficial del Taller   |   Página ${idx + 1} de ${totalPages}`;
     const prefix = `BT /F1 7.8 Tf 0.42 0.46 0.53 rg ${marginX.toFixed(2)} 24.00 Td (`;
@@ -1235,7 +1235,7 @@ const downloadDirectPdfReport = (
 
   startObj(2);
   appendAscii(
-    `<< /Type /Pages /Kids [${pageObjNumbers.map((n) => `${n} 0 R`).join(' ')}] /Count ${pageObjNumbers.length} >>\nendobj\n`
+    `<< /Type /Pages /Kids [${pageObjNumbers.map((n: number) => `${n} 0 R`).join(' ')}] /Count ${pageObjNumbers.length} >>\nendobj\n`
   );
 
   const xrefStart = pdfBytes.length;
@@ -1353,7 +1353,7 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
 
   const handleImageError = () => {
     if (sourceIndex + 1 < candidateSources.length) {
-      setSourceIndex((prev) => prev + 1);
+      setSourceIndex((prev: number) => prev + 1);
     } else {
       setUseVectorFallback(true);
     }
@@ -1455,11 +1455,13 @@ export default function App() {
         localStorage.getItem(STORAGE_KEYS.COHORT) ??
         localStorage.getItem(STORAGE_KEYS.LEGACY_COHORT);
       if (saved) {
-        const parsed = JSON.parse(saved);
+        const parsed: unknown = JSON.parse(saved);
         if (Array.isArray(parsed)) {
           return parsed
-            .map(normalizeParticipantRecord)
-            .filter((item: ParticipantRecord | null): item is ParticipantRecord => item !== null);
+            .map((rawItem: unknown) => normalizeParticipantRecord(rawItem))
+            .filter(
+              (item: ParticipantRecord | null): item is ParticipantRecord => item !== null
+            );
         }
       }
     } catch {
@@ -1488,7 +1490,10 @@ export default function App() {
   const [consent, setConsent] = useState(false);
   const [formError, setFormError] = useState('');
 
-  const allQuestions = useMemo(() => CASES_DATA.flatMap((c) => c.questions), []);
+  const allQuestions = useMemo(
+    () => CASES_DATA.flatMap((c: CaseScenario) => c.questions),
+    []
+  );
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(() => {
     if (activeSession) {
@@ -1572,7 +1577,7 @@ export default function App() {
     }
 
     const timer = window.setTimeout(() => {
-      setClosingCountdown((prev) => (prev !== null ? prev - 1 : null));
+      setClosingCountdown((prev: number | null) => (prev !== null ? prev - 1 : null));
     }, 1000);
 
     return () => window.clearTimeout(timer);
@@ -1594,7 +1599,8 @@ export default function App() {
   }, [isTeacherAuthenticated]);
 
   const currentQuestion = allQuestions[currentQuestionIndex] || allQuestions[0];
-  const currentCase = CASES_DATA.find((c) => c.id === currentQuestion.caseId) || CASES_DATA[0];
+  const currentCase =
+    CASES_DATA.find((c: CaseScenario) => c.id === currentQuestion.caseId) || CASES_DATA[0];
   const existingAnswer = activeSession ? activeSession.answers[currentQuestion.id] : undefined;
 
   useEffect(() => {
@@ -1680,22 +1686,25 @@ export default function App() {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data = await response.json();
-      const rawList = Array.isArray(data?.records)
+      const data: { status?: string; records?: unknown[]; rows?: unknown[] } =
+        await response.json();
+      const rawList: unknown[] | null = Array.isArray(data?.records)
         ? data.records
         : Array.isArray(data?.rows)
           ? data.rows
           : null;
 
       if (data && data.status === 'ok' && rawList !== null) {
-        const remoteRecords = rawList
-          .map(normalizeParticipantRecord)
-          .filter((item: ParticipantRecord | null): item is ParticipantRecord => item !== null);
+        const remoteRecords: ParticipantRecord[] = rawList
+          .map((rawItem: unknown) => normalizeParticipantRecord(rawItem))
+          .filter(
+            (item: ParticipantRecord | null): item is ParticipantRecord => item !== null
+          );
 
-        setCohort((prevLocal) => {
+        setCohort((prevLocal: ParticipantRecord[]) => {
           const mergedMap = new Map<string, ParticipantRecord>();
-          prevLocal.forEach((item) => mergedMap.set(item.id, item));
-          remoteRecords.forEach((item) => {
+          prevLocal.forEach((item: ParticipantRecord) => mergedMap.set(item.id, item));
+          remoteRecords.forEach((item: ParticipantRecord) => {
             mergedMap.set(item.id, item);
           });
           return Array.from(mergedMap.values());
@@ -1707,7 +1716,7 @@ export default function App() {
         setSheetsStatus('error');
         setSheetsStatusMessage('Respuesta inesperada de Google Apps Script.');
       }
-    } catch (err) {
+    } catch (err: unknown) {
       setSheetsStatus('error');
       const isAbort = err instanceof Error && err.name === 'AbortError';
       setSheetsStatusMessage(
@@ -1775,7 +1784,10 @@ export default function App() {
     };
 
     setActiveSession(newRecord);
-    setCohort((prev) => [newRecord, ...prev.filter((p) => p.id !== newRecord.id)]);
+    setCohort((prev: ParticipantRecord[]) => [
+      newRecord,
+      ...prev.filter((p: ParticipantRecord) => p.id !== newRecord.id),
+    ]);
     setCurrentQuestionIndex(0);
     setSelectedOption(null);
     setJustificationText('');
@@ -1824,8 +1836,8 @@ export default function App() {
     };
 
     const calcCaseScore = (caseId: number) =>
-      CASES_DATA.find((c) => c.id === caseId)!.questions.reduce(
-        (acc, q) => acc + (updatedAnswers[q.id]?.pointsEarned || 0),
+      CASES_DATA.find((c: CaseScenario) => c.id === caseId)!.questions.reduce(
+        (acc: number, q: CaseQuestion) => acc + (updatedAnswers[q.id]?.pointsEarned || 0),
         0
       );
 
@@ -1848,10 +1860,10 @@ export default function App() {
     };
 
     setActiveSession(updatedRecord);
-    setCohort((prev) => {
-      const exists = prev.some((p) => p.id === updatedRecord.id);
+    setCohort((prev: ParticipantRecord[]) => {
+      const exists = prev.some((p: ParticipantRecord) => p.id === updatedRecord.id);
       if (exists) {
-        return prev.map((p) => (p.id === updatedRecord.id ? updatedRecord : p));
+        return prev.map((p: ParticipantRecord) => (p.id === updatedRecord.id ? updatedRecord : p));
       }
       return [updatedRecord, ...prev];
     });
@@ -1867,7 +1879,7 @@ export default function App() {
 
   const handleAdvanceNextQuestion = () => {
     if (currentQuestionIndex < allQuestions.length - 1) {
-      setCurrentQuestionIndex((prev) => prev + 1);
+      setCurrentQuestionIndex((prev: number) => prev + 1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
       setClosingCountdown(null);
@@ -1915,7 +1927,7 @@ export default function App() {
       'Caso 3 (7.0 pts)',
       'Puntaje Total (20 pts)',
       'Nivel de Desempeño',
-      ...allQuestions.flatMap((q) => [
+      ...allQuestions.flatMap((q: CaseQuestion) => [
         `P${q.number} Respuesta`,
         `P${q.number} Puntos`,
         `P${q.number} Sustento`,
@@ -1927,7 +1939,7 @@ export default function App() {
       return `"${str}"`;
     };
 
-    const rows = cohort.map((p) => {
+    const rows = cohort.map((p: ParticipantRecord) => {
       const answeredCount = Object.keys(p.answers || {}).length;
       return [
         p.fullName,
@@ -1941,7 +1953,7 @@ export default function App() {
         (Number(p.case3Score) || 0).toFixed(1),
         (Number(p.totalScore) || 0).toFixed(1),
         p.level,
-        ...allQuestions.flatMap((q) => {
+        ...allQuestions.flatMap((q: CaseQuestion) => {
           const ans = p.answers?.[q.id];
           return ans
             ? [ans.selectedOption, (Number(ans.pointsEarned) || 0).toFixed(1), ans.justification]
@@ -2017,7 +2029,7 @@ export default function App() {
         if (ctx) {
           ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
           const optimizedDataUrl = canvas.toDataURL('image/png', 0.92);
-          setConfig((prev) => ({ ...prev, customLogoDataUrl: optimizedDataUrl }));
+          setConfig((prev: AppConfig) => ({ ...prev, customLogoDataUrl: optimizedDataUrl }));
           setConfigSavedNotice('Logotipo institucional optimizado y guardado correctamente.');
         }
       };
@@ -2054,11 +2066,14 @@ export default function App() {
   if (isTeacherAuthenticated) {
     const safeCohort = Array.isArray(cohort) ? cohort : [];
     const completedCount = safeCohort.filter(
-      (p) => Object.keys(p.answers || {}).length >= 12
+      (p: ParticipantRecord) => Object.keys(p.answers || {}).length >= 12
     ).length;
     const averageScore =
       safeCohort.length > 0
-        ? safeCohort.reduce((sum, p) => sum + (Number(p.totalScore) || 0), 0) / safeCohort.length
+        ? safeCohort.reduce(
+            (sum: number, p: ParticipantRecord) => sum + (Number(p.totalScore) || 0),
+            0
+          ) / safeCohort.length
         : 0;
 
     return (
@@ -2257,7 +2272,7 @@ export default function App() {
                             </td>
                           </tr>
                         ) : (
-                          safeCohort.map((p) => {
+                          safeCohort.map((p: ParticipantRecord) => {
                             const answered = Object.keys(p.answers || {}).length;
                             return (
                               <tr key={p.id} className="hover:bg-slate-50">
@@ -2361,7 +2376,7 @@ export default function App() {
                         <button
                           type="button"
                           onClick={() =>
-                            setConfig((prev) => ({ ...prev, customLogoDataUrl: null }))
+                            setConfig((prev: AppConfig) => ({ ...prev, customLogoDataUrl: null }))
                           }
                           className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-medium text-slate-700 hover:bg-slate-100"
                         >
@@ -2606,7 +2621,7 @@ export default function App() {
               </div>
 
               <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5">
-                {allQuestions.map((q, idx) => {
+                {allQuestions.map((q: CaseQuestion, idx: number) => {
                   const ans = activeSession.answers[q.id];
                   const isUnlocked = idx <= maxUnlockedIndex;
                   const isCurrent = idx === currentQuestionIndex;
@@ -2658,7 +2673,7 @@ export default function App() {
               </div>
 
               <div className="space-y-3 text-sm text-slate-700 leading-relaxed">
-                {currentCase.paragraphs.map((paragraph, pIdx) => (
+                {currentCase.paragraphs.map((paragraph: string, pIdx: number) => (
                   <p key={pIdx}>{paragraph}</p>
                 ))}
               </div>
@@ -2684,7 +2699,7 @@ export default function App() {
               </h3>
 
               <div className="space-y-2.5">
-                {currentQuestion.options.map((opt) => {
+                {currentQuestion.options.map((opt: QuestionOption) => {
                   const isSelected = selectedOption === opt.id;
                   const isAnswered = Boolean(existingAnswer);
                   const isRightKey = opt.id === currentQuestion.correctOption;
@@ -2764,7 +2779,7 @@ export default function App() {
                   <button
                     type="button"
                     disabled={currentQuestionIndex === 0}
-                    onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
+                    onClick={() => setCurrentQuestionIndex((prev: number) => Math.max(0, prev - 1))}
                     className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 text-xs sm:text-sm font-medium text-slate-700 inline-flex items-center gap-1.5"
                   >
                     <ChevronLeft className="w-4 h-4" />
@@ -2854,7 +2869,7 @@ export default function App() {
                     <button
                       type="button"
                       disabled={currentQuestionIndex === 0}
-                      onClick={() => setCurrentQuestionIndex((prev) => Math.max(0, prev - 1))}
+                      onClick={() => setCurrentQuestionIndex((prev: number) => Math.max(0, prev - 1))}
                       className="px-3.5 py-2 rounded-xl border border-slate-300 bg-white hover:bg-slate-50 disabled:opacity-40 text-xs sm:text-sm font-medium text-slate-700 inline-flex items-center gap-1.5"
                     >
                       <ChevronLeft className="w-4 h-4" />
@@ -3019,7 +3034,7 @@ export default function App() {
                   />
                   <button
                     type="button"
-                    onClick={() => setShowPass((prev) => !prev)}
+                    onClick={() => setShowPass((prev: boolean) => !prev)}
                     className="absolute right-2.5 top-2.5 text-slate-400 hover:text-slate-600"
                   >
                     {showPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
