@@ -115,20 +115,25 @@ interface AppConfig {
 }
 
 // ============================================================================
-// CONFIGURACIÓN INICIAL (LÍNEA 130: URL DE GOOGLE APPS SCRIPT)
+// CONFIGURACIÓN INICIAL (URL ACTIVA DE GOOGLE APPS SCRIPT FIJADA EN v5.0)
 // ============================================================================
 
 const STORAGE_KEYS = {
-  COHORT: 'midis_integridad_cohort_v4',
-  ACTIVE_SESSION: 'midis_integridad_active_v4',
-  CONFIG: 'midis_integridad_config_v4',
+  COHORT: 'midis_integridad_cohort_v5',
+  LEGACY_COHORT: 'midis_integridad_cohort_v4',
+  ACTIVE_SESSION: 'midis_integridad_active_v5',
+  LEGACY_ACTIVE_SESSION: 'midis_integridad_active_v4',
+  CONFIG: 'midis_integridad_config_v5',
 };
+
+const FIXED_APPS_SCRIPT_URL =
+  'https://script.google.com/macros/s/AKfycbyeRNHGfIVNwAVlSj6IRuLusmsoMPx-JlFcWXRuo-vkd59SFmnPdCW2_5LgnUFYl4oL3A/exec';
 
 const DEFAULT_CONFIG: AppConfig = {
   institutionName: 'Ministerio de Desarrollo e Inclusión Social (MIDIS)',
   workshopTitle: 'Integridad en la gestión pública para la entrega de servicios',
   customLogoDataUrl: null,
-  googleSheetsUrl: 'https://script.google.com/macros/s/AKfycbyeRNHGfIVNwAVlSj6IRuLusmsoMPx-JlFcWXRuo-vkd59SFmnPdCW2_5LgnUFYl4oL3A/exec',
+  googleSheetsUrl: FIXED_APPS_SCRIPT_URL,
   teacherUser: 'docente.midis',
   teacherPass: 'Integridad2026',
 };
@@ -720,13 +725,13 @@ const DEMO_COHORT: ParticipantRecord[] = [
 ];
 
 // ============================================================================
-// FUNCIONES AUXILIARES (TIEMPO, VALIDACIÓN, MOTOR SOCRÁTICO, EXPORTACIÓN)
+// FUNCIONES AUXILIARES (TIEMPO, SANEAMIENTO SEGURO, VALIDACIÓN, MOTOR SOCRÁTICO)
 // ============================================================================
 
 const formatTimestamp = (iso?: string | null): string => {
   if (!iso) return 'En curso';
   const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return iso;
+  if (Number.isNaN(d.getTime())) return String(iso);
   return d
     .toLocaleString('es-PE', {
       day: '2-digit',
@@ -754,6 +759,89 @@ const computePerformanceLevel = (score: number): string => {
   if (score >= 13) return 'Satisfactorio (Criterio Preventivo Consolidado)';
   if (score >= 10) return 'En Proceso (Requiere Refuerzo Normativo)';
   return 'Inicial (Atención Prioritaria en Integridad)';
+};
+
+// Normalizador estricto para blindar la Vista Docente contra registros incompletos o null de Google Sheets
+const normalizeParticipantRecord = (raw: unknown): ParticipantRecord | null => {
+  if (!raw || typeof raw !== 'object') return null;
+
+  const candidate =
+    'rawRecord' in raw &&
+    (raw as { rawRecord?: unknown }).rawRecord &&
+    typeof (raw as { rawRecord?: unknown }).rawRecord === 'object'
+      ? ((raw as { rawRecord: Record<string, unknown> }).rawRecord)
+      : (raw as Record<string, unknown>);
+
+  const id = String(candidate.id ?? '').trim();
+  const fullName = String(candidate.fullName ?? candidate.Participante ?? '').trim();
+  const dni = String(candidate.dni ?? candidate.DNI ?? '')
+    .replace(/^'/, '')
+    .trim();
+
+  if (!id && !dni && !fullName) return null;
+
+  const rawAnswers = candidate.answers;
+  const safeAnswers: Record<string, AnswerRecord> = {};
+  if (rawAnswers && typeof rawAnswers === 'object' && !Array.isArray(rawAnswers)) {
+    Object.entries(rawAnswers as Record<string, unknown>).forEach(([key, val]) => {
+      if (val && typeof val === 'object') {
+        const a = val as Record<string, unknown>;
+        const fb =
+          a.feedback && typeof a.feedback === 'object'
+            ? (a.feedback as Record<string, unknown>)
+            : {};
+        safeAnswers[key] = {
+          questionId: String(a.questionId ?? key),
+          selectedOption: (['A', 'B', 'C', 'D'].includes(String(a.selectedOption))
+            ? String(a.selectedOption)
+            : 'A') as 'A' | 'B' | 'C' | 'D',
+          justification: String(a.justification ?? ''),
+          isCorrect: Boolean(a.isCorrect),
+          pointsEarned: Number(a.pointsEarned) || 0,
+          answeredAt: String(a.answeredAt ?? ''),
+          feedback: {
+            recognition: String(fb.recognition ?? ''),
+            complement: String(fb.complement ?? ''),
+            socraticQuestion: String(fb.socraticQuestion ?? ''),
+            normativeReference: String(fb.normativeReference ?? ''),
+          },
+        };
+      }
+    });
+  }
+
+  const case1Score = Number(candidate.case1Score ?? candidate.case1 ?? candidate.Caso_1_Pts) || 0;
+  const case2Score = Number(candidate.case2Score ?? candidate.case2 ?? candidate.Caso_2_Pts) || 0;
+  const case3Score = Number(candidate.case3Score ?? candidate.case3 ?? candidate.Caso_3_Pts) || 0;
+  const rawTotal = Number(candidate.totalScore ?? candidate.total ?? candidate.Total_20_Pts);
+  const totalScore = Number.isFinite(rawTotal)
+    ? Number(rawTotal.toFixed(1))
+    : Number((case1Score + case2Score + case3Score).toFixed(1));
+
+  const answeredCount = Object.keys(safeAnswers).length;
+  const startedAt = String(candidate.startedAt ?? new Date().toISOString());
+  const rawCompleted = candidate.completedAt;
+  const completedAt =
+    rawCompleted && rawCompleted !== 'En curso' ? String(rawCompleted) : null;
+
+  return {
+    id: id || `${dni || 'part'}-${startedAt}`,
+    fullName: fullName || 'Participante sin nombre',
+    dni: dni || '--------',
+    email: String(candidate.email ?? candidate.Correo_Electronico ?? ''),
+    consent: candidate.consent !== false,
+    startedAt,
+    completedAt,
+    answers: safeAnswers,
+    totalScore,
+    case1Score: Number(case1Score.toFixed(1)),
+    case2Score: Number(case2Score.toFixed(1)),
+    case3Score: Number(case3Score.toFixed(1)),
+    level: String(
+      candidate.level ??
+        (answeredCount > 0 ? computePerformanceLevel(totalScore) : 'En curso')
+    ),
+  };
 };
 
 const evaluateSocraticFeedback = (
@@ -794,6 +882,464 @@ const evaluateSocraticFeedback = (
     },
   };
 };
+
+// ============================================================================
+// GENERADOR NATIVO DE DESCARGA DIRECTA PDF EN PC (SIN POPUPS NI DEPENDENCIAS)
+// ============================================================================
+
+const encodeWinAnsiBytes = (text: string): number[] => {
+  const bytes: number[] = [];
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code === 0x28 || code === 0x29 || code === 0x5c) {
+      // Escapar '(', ')' y '\' dentro de cadenas PDF
+      bytes.push(0x5c, code);
+    } else if (code >= 0x20 && code <= 0x7e) {
+      bytes.push(code);
+    } else if (code >= 0xa0 && code <= 0xff) {
+      // Caracteres españoles (á, é, í, ó, ú, ñ, ü, ¿, ¡, °, etc.) coinciden en WinAnsiEncoding
+      bytes.push(code);
+    } else if (code === 0x2014) {
+      bytes.push(0x97); // em-dash
+    } else if (code === 0x2013) {
+      bytes.push(0x96); // en-dash
+    } else if (code === 0x201c || code === 0x201d) {
+      bytes.push(0x22); // comillas dobles
+    } else if (code === 0x2018 || code === 0x2019) {
+      bytes.push(0x27); // comilla simple
+    } else if (code === 0x2022) {
+      bytes.push(0x95); // viñeta
+    } else {
+      bytes.push(0x3f); // '?'
+    }
+  }
+  return bytes;
+};
+
+const wrapPdfLine = (text: string, maxChars: number): string[] => {
+  const clean = text.replace(/\s+/g, ' ').trim();
+  if (!clean) return [];
+  const words = clean.split(' ');
+  const lines: string[] = [];
+  let current = '';
+
+  for (const word of words) {
+    if (!current) {
+      current = word;
+    } else if (current.length + 1 + word.length <= maxChars) {
+      current += ' ' + word;
+    } else {
+      lines.push(current);
+      current = word;
+    }
+  }
+  if (current) lines.push(current);
+  return lines;
+};
+
+const downloadDirectPdfReport = (
+  participant: ParticipantRecord,
+  config: AppConfig
+): void => {
+  const pageWidth = 595.28; // A4 pts
+  const pageHeight = 841.89;
+  const marginX = 44;
+  const contentWidth = pageWidth - marginX * 2;
+  const topMargin = 46;
+  const bottomMargin = 48;
+
+  const pagesOps: number[][] = [[]];
+  let currentY = pageHeight - topMargin;
+
+  const pushOps = (cmd: string) => {
+    const target = pagesOps[pagesOps.length - 1];
+    for (let i = 0; i < cmd.length; i++) {
+      target.push(cmd.charCodeAt(i) & 0xff);
+    }
+    target.push(0x0a);
+  };
+
+  const pushTextOp = (
+    text: string,
+    x: number,
+    y: number,
+    fontKey: 'F1' | 'F2',
+    fontSize: number,
+    rgb: [number, number, number] = [0.06, 0.09, 0.16]
+  ) => {
+    const target = pagesOps[pagesOps.length - 1];
+    const prefix = `BT /${fontKey} ${fontSize.toFixed(1)} Tf ${rgb[0].toFixed(3)} ${rgb[1].toFixed(3)} ${rgb[2].toFixed(3)} rg ${x.toFixed(2)} ${y.toFixed(2)} Td (`;
+    for (let i = 0; i < prefix.length; i++) {
+      target.push(prefix.charCodeAt(i) & 0xff);
+    }
+    const encoded = encodeWinAnsiBytes(text);
+    for (let i = 0; i < encoded.length; i++) {
+      target.push(encoded[i]);
+    }
+    const suffix = ') Tj ET\n';
+    for (let i = 0; i < suffix.length; i++) {
+      target.push(suffix.charCodeAt(i) & 0xff);
+    }
+  };
+
+  const ensureSpace = (neededHeight: number) => {
+    if (currentY - neededHeight < bottomMargin) {
+      pagesOps.push([]);
+      currentY = pageHeight - topMargin;
+    }
+  };
+
+  const drawWrappedBlock = (
+    text: string,
+    options: {
+      fontKey?: 'F1' | 'F2';
+      fontSize?: number;
+      lineHeight?: number;
+      indentX?: number;
+      rgb?: [number, number, number];
+      maxChars?: number;
+    } = {}
+  ) => {
+    const fontKey = options.fontKey ?? 'F1';
+    const fontSize = options.fontSize ?? 9.5;
+    const lineHeight = options.lineHeight ?? fontSize + 3.5;
+    const indentX = options.indentX ?? 0;
+    const rgb = options.rgb ?? [0.12, 0.16, 0.23];
+    const maxChars =
+      options.maxChars ?? Math.max(30, Math.floor((contentWidth - indentX) / (fontSize * 0.51)));
+
+    const lines = wrapPdfLine(text, maxChars);
+    for (const line of lines) {
+      ensureSpace(lineHeight);
+      pushTextOp(line, marginX + indentX, currentY, fontKey, fontSize, rgb);
+      currentY -= lineHeight;
+    }
+  };
+
+  // --- CABECERA INSTITUCIONAL MIDIS (BLOQUE BLANCO + ROJO PERÚ + GRIS MIDIS) ---
+  const bannerHeight = 36;
+  const bannerY = currentY - bannerHeight + 10;
+
+  // Bloque blanco izquierdo (República del Perú)
+  pushOps(`0.98 0.98 0.99 rg ${marginX} ${bannerY} 72 ${bannerHeight} re f`);
+  pushOps(`0.75 0.78 0.82 RG 0.6 w ${marginX} ${bannerY} 72 ${bannerHeight} re S`);
+  pushTextOp('REPUBLICA', marginX + 13, bannerY + 21, 'F2', 7.2, [0.1, 0.13, 0.18]);
+  pushTextOp('DEL PERU', marginX + 16, bannerY + 11, 'F2', 7.2, [0.1, 0.13, 0.18]);
+
+  // Bloque rojo central (PERÚ)
+  pushOps(`0.851 0.063 0.137 rg ${marginX + 72} ${bannerY} 54 ${bannerHeight} re f`);
+  pushTextOp('PERÚ', marginX + 83, bannerY + 13, 'F2', 12.5, [1, 1, 1]);
+
+  // Bloque gris institucional (Ministerio de Desarrollo e Inclusión Social)
+  pushOps(`0.341 0.341 0.337 rg ${marginX + 126} ${bannerY} 144 ${bannerHeight} re f`);
+  pushTextOp('Ministerio de Desarrollo', marginX + 134, bannerY + 21, 'F2', 8.5, [1, 1, 1]);
+  pushTextOp('e Inclusión Social', marginX + 134, bannerY + 10, 'F2', 8.5, [1, 1, 1]);
+
+  // Título a la derecha del emblema
+  pushTextOp('TALLER VIRTUAL DE INTEGRIDAD PÚBLICA', marginX + 282, bannerY + 23, 'F2', 8.2, [0.75, 0.08, 0.15]);
+  const titleLines = wrapPdfLine(config.workshopTitle, 42);
+  titleLines.slice(0, 2).forEach((tLine, idx) => {
+    pushTextOp(tLine, marginX + 282, bannerY + 12 - idx * 10, 'F2', 8.5, [0.08, 0.11, 0.17]);
+  });
+
+  currentY = bannerY - 12;
+  // Línea roja separadora
+  pushOps(`0.851 0.063 0.137 RG 1.5 w ${marginX} ${currentY} m ${pageWidth - marginX} ${currentY} l S`);
+  currentY -= 18;
+
+  // --- FICHA DE RESULTADOS DEL PARTICIPANTE ---
+  const cardHeight = 86;
+  const cardY = currentY - cardHeight + 8;
+  pushOps(`0.97 0.98 0.99 rg ${marginX} ${cardY} ${contentWidth} ${cardHeight} re f`);
+  pushOps(`0.80 0.84 0.88 RG 0.8 w ${marginX} ${cardY} ${contentWidth} ${cardHeight} re S`);
+
+  pushTextOp('REPORTE INTEGRAL DE DESEMPEÑO Y PLAN DE ACCIÓN', marginX + 12, cardY + 69, 'F2', 10.5, [0.06, 0.09, 0.16]);
+  pushTextOp(`Participante: ${participant.fullName}`, marginX + 12, cardY + 53, 'F2', 9, [0.1, 0.14, 0.2]);
+  pushTextOp(`DNI: ${participant.dni}`, marginX + 330, cardY + 53, 'F2', 9, [0.1, 0.14, 0.2]);
+  pushTextOp(`Correo: ${participant.email}`, marginX + 12, cardY + 39, 'F1', 8.8, [0.2, 0.25, 0.33]);
+  pushTextOp(
+    `Calificación Final: ${participant.totalScore.toFixed(1)} / 20.0 pts`,
+    marginX + 330,
+    cardY + 39,
+    'F2',
+    9.5,
+    [0.75, 0.08, 0.15]
+  );
+  pushTextOp(
+    `Ingreso: ${formatTimestamp(participant.startedAt)}   |   Fin: ${formatTimestamp(participant.completedAt)}`,
+    marginX + 12,
+    cardY + 25,
+    'F1',
+    8.5,
+    [0.25, 0.3, 0.38]
+  );
+  pushTextOp(`Nivel alcanzado: ${participant.level}`, marginX + 12, cardY + 11, 'F2', 8.8, [0.06, 0.35, 0.2]);
+
+  currentY = cardY - 14;
+
+  // Resumen por casos
+  pushTextOp(
+    `Desglose por Caso:   Caso 1: ${participant.case1Score.toFixed(1)} / 6.5 pts   |   Caso 2: ${participant.case2Score.toFixed(1)} / 6.5 pts   |   Caso 3: ${participant.case3Score.toFixed(1)} / 7.0 pts`,
+    marginX,
+    currentY,
+    'F2',
+    9,
+    [0.12, 0.16, 0.23]
+  );
+  currentY -= 18;
+
+  // --- DETALLE DE LAS 12 PREGUNTAS POR CASO ---
+  for (const scenario of CASES_DATA) {
+    ensureSpace(34);
+    const headerBarY = currentY - 14;
+    pushOps(`0.118 0.161 0.231 rg ${marginX} ${headerBarY} ${contentWidth} 20 re f`);
+    const caseHeader = `${scenario.code}: ${scenario.title}`.slice(0, 88);
+    pushTextOp(caseHeader, marginX + 8, headerBarY + 6, 'F2', 9.2, [1, 1, 1]);
+    currentY = headerBarY - 12;
+
+    for (const q of scenario.questions) {
+      const ans = participant.answers[q.id];
+      ensureSpace(68);
+
+      const statusLabel = ans
+        ? `${ans.pointsEarned.toFixed(1)} / ${q.points.toFixed(1)} pts (${ans.isCorrect ? 'CORRECTA' : 'INCORRECTA'})`
+        : `0.0 / ${q.points.toFixed(1)} pts (PENDIENTE)`;
+      const statusColor: [number, number, number] = ans
+        ? ans.isCorrect
+          ? [0.06, 0.45, 0.22]
+          : [0.75, 0.1, 0.15]
+        : [0.4, 0.45, 0.52];
+
+      pushTextOp(`Pregunta ${q.number} - ${q.focusArea}`, marginX, currentY, 'F2', 9.2, [0.06, 0.09, 0.16]);
+      pushTextOp(statusLabel, marginX + 345, currentY, 'F2', 8.5, statusColor);
+      currentY -= 13;
+
+      drawWrappedBlock(`Consigna: ${q.prompt}`, {
+        fontKey: 'F1',
+        fontSize: 8.6,
+        indentX: 6,
+        rgb: [0.22, 0.27, 0.35],
+      });
+
+      if (ans) {
+        drawWrappedBlock(
+          `Alternativa elegida: ${ans.selectedOption}   |   Clave esperada: ${q.correctOption}`,
+          {
+            fontKey: 'F2',
+            fontSize: 8.6,
+            indentX: 6,
+            rgb: [0.08, 0.11, 0.17],
+          }
+        );
+        drawWrappedBlock(`Sustento del participante: ${ans.justification}`, {
+          fontKey: 'F1',
+          fontSize: 8.5,
+          indentX: 6,
+          rgb: [0.15, 0.2, 0.28],
+        });
+        drawWrappedBlock(
+          `Retroalimentación y base normativa: ${ans.feedback.recognition} ${ans.feedback.complement}`,
+          {
+            fontKey: 'F1',
+            fontSize: 8.4,
+            indentX: 6,
+            rgb: [0.18, 0.24, 0.32],
+          }
+        );
+      } else {
+        drawWrappedBlock('Sin respuesta registrada aún.', {
+          fontKey: 'F1',
+          fontSize: 8.5,
+          indentX: 6,
+          rgb: [0.45, 0.5, 0.56],
+        });
+      }
+
+      currentY -= 4;
+      pushOps(`0.88 0.90 0.93 RG 0.5 w ${marginX} ${currentY} m ${pageWidth - marginX} ${currentY} l S`);
+      currentY -= 11;
+    }
+  }
+
+  // --- COMPROMISOS Y PLAN DE ACCIÓN TERRITORIAL ---
+  ensureSpace(88);
+  currentY -= 4;
+  pushTextOp(
+    'COMPROMISOS Y PLAN DE ACCIÓN TERRITORIAL RECOMENDADO',
+    marginX,
+    currentY,
+    'F2',
+    9.8,
+    [0.08, 0.22, 0.52]
+  );
+  currentY -= 14;
+
+  const commitments = [
+    '1. Conflictos de intereses: Activar oportunamente la excusación escrita ante el superior inmediato, verificar la DJI y consignar audiencias en el Registro de Visitas en Línea.',
+    '2. Transparencia y custodia de recursos: Rechazar por escrito cualquier orden manifiestamente ilegal o proselitista, reportar intentos de soborno y articular comités de vigilancia con GORE y MIDIS.',
+    '3. Canales de denuncia y protección: Derivar denuncias en máximo 1 día hábil con código cifrado hacia la OII/STPAD, aplicar medidas de protección laboral (D.S. N° 010-2017-JUS) y resguardar la confidencialidad (Art. 17.3 TUO Ley de Transparencia).',
+  ];
+
+  for (const item of commitments) {
+    drawWrappedBlock(item, {
+      fontKey: 'F1',
+      fontSize: 8.6,
+      indentX: 4,
+      rgb: [0.1, 0.14, 0.2],
+    });
+    currentY -= 2;
+  }
+
+  // Numeración de pie de página en cada hoja
+  const totalPages = pagesOps.length;
+  pagesOps.forEach((_, idx) => {
+    const target = pagesOps[idx];
+    const footerStr = `${config.institutionName} - Reporte Oficial del Taller   |   Página ${idx + 1} de ${totalPages}`;
+    const prefix = `BT /F1 7.8 Tf 0.42 0.46 0.53 rg ${marginX.toFixed(2)} 24.00 Td (`;
+    for (let i = 0; i < prefix.length; i++) target.push(prefix.charCodeAt(i) & 0xff);
+    const enc = encodeWinAnsiBytes(footerStr);
+    for (let i = 0; i < enc.length; i++) target.push(enc[i]);
+    const suffix = ') Tj ET\n';
+    for (let i = 0; i < suffix.length; i++) target.push(suffix.charCodeAt(i) & 0xff);
+  });
+
+  // --- ENSAMBLAJE BINARIO PDF 1.4 CON TABLA XREF EXACTA ---
+  const pdfBytes: number[] = [];
+  const appendAscii = (s: string) => {
+    for (let i = 0; i < s.length; i++) pdfBytes.push(s.charCodeAt(i) & 0xff);
+  };
+  const appendBytes = (arr: number[]) => {
+    for (let i = 0; i < arr.length; i++) pdfBytes.push(arr[i]);
+  };
+
+  appendAscii('%PDF-1.4\n');
+  const offsets: number[] = [0]; // Índice 0 reservado
+
+  const startObj = (objNum: number) => {
+    offsets[objNum] = pdfBytes.length;
+    appendAscii(`${objNum} 0 obj\n`);
+  };
+
+  // Obj 1: Catalog
+  startObj(1);
+  appendAscii('<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+
+  // Obj 3 & 4: Fuentes estándar WinAnsiEncoding (soporta tildes y ñ)
+  startObj(3);
+  appendAscii('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>\nendobj\n');
+
+  startObj(4);
+  appendAscii('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n');
+
+  // Objetos de páginas y flujos de contenido
+  const pageObjNumbers: number[] = [];
+  let nextObjNum = 5;
+
+  for (const streamBytes of pagesOps) {
+    const pageObj = nextObjNum++;
+    const contentObj = nextObjNum++;
+    pageObjNumbers.push(pageObj);
+
+    startObj(pageObj);
+    appendAscii(
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObj} 0 R >>\nendobj\n`
+    );
+
+    startObj(contentObj);
+    appendAscii(`<< /Length ${streamBytes.length} >>\nstream\n`);
+    appendBytes(streamBytes);
+    appendAscii('\nendstream\nendobj\n');
+  }
+
+  // Obj 2: Pages root
+  startObj(2);
+  appendAscii(
+    `<< /Type /Pages /Kids [${pageObjNumbers.map((n) => `${n} 0 R`).join(' ')}] /Count ${pageObjNumbers.length} >>\nendobj\n`
+  );
+
+  // Tabla xref
+  const xrefStart = pdfBytes.length;
+  appendAscii(`xref\n0 ${nextObjNum}\n`);
+  appendAscii('0000000000 65535 f \n');
+  for (let i = 1; i < nextObjNum; i++) {
+    const offStr = String(offsets[i]).padStart(10, '0');
+    appendAscii(`${offStr} 00000 n \n`);
+  }
+
+  appendAscii(
+    `trailer\n<< /Size ${nextObjNum} /Root 1 0 R >>\nstartxref\n${xrefStart}\n%%EOF`
+  );
+
+  const blob = new Blob([new Uint8Array(pdfBytes)], { type: 'application/pdf' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  const safeDni = (participant.dni || 'Participante').replace(/[^a-zA-Z0-9_-]/g, '');
+  link.href = url;
+  link.download = `Reporte_Integral_MIDIS_${safeDni}.pdf`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+};
+
+// ============================================================================
+// ESCUDO DE PROTECCIÓN CONTRA PANTALLA EN BLANCO EN VISTA DOCENTE
+// ============================================================================
+
+interface ErrorBoundaryProps {
+  children: React.ReactNode;
+  onExit: () => void;
+}
+
+interface ErrorBoundaryState {
+  hasError: boolean;
+}
+
+class TeacherErrorBoundary extends React.Component<ErrorBoundaryProps, ErrorBoundaryState> {
+  constructor(props: ErrorBoundaryProps) {
+    super(props);
+    this.state = { hasError: false };
+  }
+
+  static getDerivedStateFromError(): ErrorBoundaryState {
+    return { hasError: true };
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+          <div className="bg-white border border-rose-200 rounded-2xl max-w-md w-full p-6 shadow-sm space-y-4 text-center">
+            <AlertTriangle className="w-10 h-10 text-rose-600 mx-auto" />
+            <h2 className="text-base font-bold text-slate-900">
+              Se detectó un dato incompatible al renderizar el panel
+            </h2>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              La aplicación evitó el cierre visual de la página. Puedes recargar la vista o volver al simulador.
+            </p>
+            <div className="flex justify-center gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => this.setState({ hasError: false })}
+                className="px-4 py-2 rounded-lg bg-slate-900 text-white text-xs font-semibold"
+              >
+                Reintentar vista docente
+              </button>
+              <button
+                type="button"
+                onClick={this.props.onExit}
+                className="px-4 py-2 rounded-lg border border-slate-300 text-slate-700 text-xs font-medium"
+              >
+                Volver al simulador
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // ============================================================================
 // EMBLEMA OFICIAL DEL MIDIS (SOPORTE PNG SIN RECORTES + RESPALDO VECTORIAL)
@@ -850,7 +1396,6 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
     );
   }
 
-  // Respaldo vectorial oficial en proporción horizontal exacta (Escudo + PERÚ + Ministerio de Desarrollo e Inclusión Social)
   return (
     <div
       onDoubleClick={onDoubleClick}
@@ -858,7 +1403,6 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
       className="inline-flex items-stretch rounded-sm overflow-hidden border border-slate-300 shadow-xs select-none cursor-pointer bg-white"
       style={{ height: compact ? '44px' : '54px' }}
     >
-      {/* Bloque izquierdo blanco: Escudo Nacional + REPÚBLICA DEL PERÚ */}
       <div className="flex flex-col items-center justify-center bg-white px-2.5 py-1 border-r border-slate-200">
         <span className="text-[6.5px] font-bold tracking-wider text-slate-800 leading-none mb-0.5">
           REPÚBLICA DEL PERÚ
@@ -880,14 +1424,12 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
         </svg>
       </div>
 
-      {/* Bloque central rojo: PERÚ */}
       <div className="flex items-center justify-center bg-[#D91023] px-3.5">
         <span className="text-white font-extrabold tracking-wide text-base sm:text-lg leading-none">
           PERÚ
         </span>
       </div>
 
-      {/* Bloque derecho gris institucional: Ministerio de Desarrollo e Inclusión Social */}
       <div className="flex flex-col justify-center bg-[#575756] px-3.5 py-1 text-left">
         <span className="text-white font-semibold text-[11px] sm:text-xs leading-tight whitespace-nowrap">
           Ministerio de Desarrollo
@@ -901,150 +1443,47 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
 };
 
 // ============================================================================
-// GENERADOR DE REPORTE INTEGRAL PDF (VENTANA IMPRIMIBLE CON EMBLEMA MIDIS)
-// ============================================================================
-
-const generatePrintableReportHtml = (
-  participant: ParticipantRecord,
-  config: AppConfig
-): string => {
-  const logoHtml = config.customLogoDataUrl
-    ? `<img src="${config.customLogoDataUrl}" alt="MIDIS" style="height:54px;width:auto;object-fit:contain;" />`
-    : `<div style="display:inline-flex;align-items:stretch;border:1px solid #cbd5e1;height:52px;font-family:Arial,sans-serif;">
-        <div style="background:#fff;padding:4px 8px;display:flex;flex-direction:column;align-items:center;justify-content:center;border-right:1px solid #e2e8f0;">
-          <div style="font-size:6px;font-weight:700;color:#1e293b;">REPÚBLICA DEL PERÚ</div>
-          <div style="width:22px;height:24px;border:2px solid #b91c1c;border-radius:0 0 10px 10px;margin-top:2px;background:linear-gradient(to bottom,#e0f2fe 50%,#dc2626 50%);"></div>
-        </div>
-        <div style="background:#D91023;color:#fff;font-weight:800;font-size:18px;padding:0 14px;display:flex;align-items:center;">PERÚ</div>
-        <div style="background:#575756;color:#fff;font-size:11px;font-weight:600;padding:0 14px;display:flex;flex-direction:column;justify-content:center;line-height:1.25;">
-          <div>Ministerio de Desarrollo</div>
-          <div>e Inclusión Social</div>
-        </div>
-      </div>`;
-
-  const questionsHtml = CASES_DATA.map((c) => {
-    const qBlocks = c.questions
-      .map((q) => {
-        const ans = participant.answers[q.id];
-        if (!ans) {
-          return `<div style="padding:10px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:8px;background:#f8fafc;">
-            <strong>Pregunta ${q.number} (${q.points.toFixed(1)} pts):</strong> Pendiente de respuesta.
-          </div>`;
-        }
-        return `<div style="padding:12px;border:1px solid ${ans.isCorrect ? '#86efac' : '#fca5a5'};border-radius:6px;margin-bottom:10px;background:${ans.isCorrect ? '#f0fdf4' : '#fef2f2'};">
-          <div style="display:flex;justify-content:space-between;margin-bottom:4px;">
-            <strong>Pregunta ${q.number} — ${q.focusArea}</strong>
-            <span><strong>${ans.pointsEarned.toFixed(1)} / ${q.points.toFixed(1)} pts</strong> (${ans.isCorrect ? 'Correcta' : 'Incorrecta'})</span>
-          </div>
-          <div style="font-size:12px;color:#334155;margin-bottom:6px;"><em>${q.prompt}</em></div>
-          <div style="font-size:12px;margin-bottom:4px;"><strong>Alternativa elegida:</strong> ${ans.selectedOption} | <strong>Clave:</strong> ${q.correctOption}</div>
-          <div style="font-size:12px;margin-bottom:6px;background:#fff;padding:8px;border-radius:4px;border:1px solid #e2e8f0;">
-            <strong>Sustento del participante:</strong> ${ans.justification}
-          </div>
-          <div style="font-size:11.5px;color:#1e293b;">
-            <strong>Retroalimentación y complemento normativo:</strong> ${ans.feedback.recognition} ${ans.feedback.complement}
-          </div>
-        </div>`;
-      })
-      .join('');
-
-    return `<div style="margin-top:18px;">
-      <h3 style="background:#1e293b;color:#fff;padding:8px 12px;border-radius:6px;font-size:14px;">${c.code}: ${c.title}</h3>
-      ${qBlocks}
-    </div>`;
-  }).join('');
-
-  return `<!DOCTYPE html>
-  <html lang="es">
-  <head>
-    <meta charset="UTF-8" />
-    <title>Reporte Integral - ${participant.fullName}</title>
-    <style>
-      body { font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; margin: 24px; line-height: 1.45; }
-      @media print { body { margin: 12px; } }
-    </style>
-  </head>
-  <body>
-    <div style="display:flex;justify-content:space-between;align-items:center;border-bottom:2px solid #D91023;padding-bottom:12px;margin-bottom:16px;">
-      ${logoHtml}
-      <div style="text-align:right;">
-        <div style="font-size:11px;color:#64748b;text-transform:uppercase;font-weight:700;">Taller Virtual de Integridad Pública</div>
-        <div style="font-size:14px;font-weight:700;color:#0f172a;">${config.workshopTitle}</div>
-      </div>
-    </div>
-
-    <div style="background:#f8fafc;border:1px solid #cbd5e1;border-radius:8px;padding:14px;margin-bottom:16px;">
-      <h2 style="margin:0 0 10px 0;font-size:16px;color:#0f172a;">Reporte Integral de Desempeño y Plan de Acción</h2>
-      <table style="width:100%;font-size:12.5px;border-collapse:collapse;">
-        <tr>
-          <td style="padding:4px 0;"><strong>Participante:</strong> ${participant.fullName}</td>
-          <td style="padding:4px 0;"><strong>DNI:</strong> ${participant.dni}</td>
-        </tr>
-        <tr>
-          <td style="padding:4px 0;"><strong>Correo electrónico:</strong> ${participant.email}</td>
-          <td style="padding:4px 0;"><strong>Calificación Final:</strong> ${participant.totalScore.toFixed(1)} / 20.0 pts</td>
-        </tr>
-        <tr>
-          <td style="padding:4px 0;"><strong>Hora de ingreso:</strong> ${formatTimestamp(participant.startedAt)}</td>
-          <td style="padding:4px 0;"><strong>Hora de fin:</strong> ${formatTimestamp(participant.completedAt)}</td>
-        </tr>
-        <tr>
-          <td colspan="2" style="padding:4px 0;"><strong>Nivel alcanzado:</strong> ${participant.level}</td>
-        </tr>
-      </table>
-    </div>
-
-    <div style="display:flex;gap:12px;margin-bottom:16px;">
-      <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:10px;text-align:center;">
-        <div style="font-size:11px;color:#64748b;">Caso 1: Conflictos de Intereses</div>
-        <div style="font-size:16px;font-weight:700;">${participant.case1Score.toFixed(1)} / 6.5 pts</div>
-      </div>
-      <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:10px;text-align:center;">
-        <div style="font-size:11px;color:#64748b;">Caso 2: Recursos y Transparencia</div>
-        <div style="font-size:16px;font-weight:700;">${participant.case2Score.toFixed(1)} / 6.5 pts</div>
-      </div>
-      <div style="flex:1;border:1px solid #cbd5e1;border-radius:6px;padding:10px;text-align:center;">
-        <div style="font-size:11px;color:#64748b;">Caso 3: Denuncias y Protección</div>
-        <div style="font-size:16px;font-weight:700;">${participant.case3Score.toFixed(1)} / 7.0 pts</div>
-      </div>
-    </div>
-
-    ${questionsHtml}
-
-    <div style="margin-top:20px;border:1px solid #93c5fd;background:#eff6ff;border-radius:8px;padding:14px;">
-      <h3 style="margin:0 0 8px 0;font-size:14px;color:#1e3a8a;">Compromisos y Plan de Acción Territorial Recomendado</h3>
-      <ul style="margin:0;padding-left:18px;font-size:12px;color:#1e293b;">
-        <li><strong>Conflictos de intereses:</strong> Activar oportunamente la excusación escrita ante el superior inmediato, verificar la DJI y consignar audiencias en el Registro de Visitas en Línea.</li>
-        <li><strong>Transparencia y custodia de recursos:</strong> Rechazar por escrito cualquier orden manifiestamente ilegal o proselitista, reportar intentos de soborno y articular comités de vigilancia con GORE y MIDIS.</li>
-        <li><strong>Canales de denuncia y protección:</strong> Derivar denuncias en máximo 1 día hábil con código cifrado hacia la OII/STPAD, aplicar medidas de protección laboral (D.S. N° 010-2017-JUS) y resguardar la confidencialidad (Art. 17.3 TUO Ley de Transparencia).</li>
-      </ul>
-    </div>
-    <script>window.onload = function() { window.print(); };</script>
-  </body>
-  </html>`;
-};
-
-// ============================================================================
-// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v4.1 — BASE v4.0)
+// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.0)
 // ============================================================================
 
 export default function App() {
-  // Configuración institucional y de Google Sheets
+  // Configuración institucional y URL activa /exec fijada
   const [config, setConfig] = useState<AppConfig>(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEYS.CONFIG);
-      if (saved) return { ...DEFAULT_CONFIG, ...JSON.parse(saved) };
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        const validUrl =
+          typeof parsed.googleSheetsUrl === 'string' &&
+          parsed.googleSheetsUrl.trim().startsWith('https://script.google.com/')
+            ? parsed.googleSheetsUrl.trim()
+            : FIXED_APPS_SCRIPT_URL;
+        return {
+          ...DEFAULT_CONFIG,
+          ...parsed,
+          googleSheetsUrl: validUrl,
+        };
+      }
     } catch {
       // Ignorar error de lectura
     }
     return DEFAULT_CONFIG;
   });
 
-  // Cohorte local (inicia limpia en 0 participantes)
+  // Cohorte local normalizada (inicia limpia en 0 participantes)
   const [cohort, setCohort] = useState<ParticipantRecord[]>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.COHORT);
-      if (saved) return JSON.parse(saved);
+      const saved =
+        localStorage.getItem(STORAGE_KEYS.COHORT) ??
+        localStorage.getItem(STORAGE_KEYS.LEGACY_COHORT);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed
+            .map(normalizeParticipantRecord)
+            .filter((item): item is ParticipantRecord => item !== null);
+        }
+      }
     } catch {
       // Ignorar error
     }
@@ -1054,26 +1493,27 @@ export default function App() {
   // Sesión activa del participante
   const [activeSession, setActiveSession] = useState<ParticipantRecord | null>(() => {
     try {
-      const saved = localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION);
-      if (saved) return JSON.parse(saved);
+      const saved =
+        localStorage.getItem(STORAGE_KEYS.ACTIVE_SESSION) ??
+        localStorage.getItem(STORAGE_KEYS.LEGACY_ACTIVE_SESSION);
+      if (saved) {
+        return normalizeParticipantRecord(JSON.parse(saved));
+      }
     } catch {
       // Ignorar error
     }
     return null;
   });
 
-  // Formulario de ingreso del participante (solo 3 campos esenciales + consentimiento)
+  // Formulario de ingreso del participante
   const [fullName, setFullName] = useState('');
   const [dni, setDni] = useState('');
   const [email, setEmail] = useState('');
   const [consent, setConsent] = useState(false);
   const [formError, setFormError] = useState('');
 
-  // Navegación del simulador (12 preguntas en orden secuencial)
-  const allQuestions = useMemo(
-    () => CASES_DATA.flatMap((c) => c.questions),
-    []
-  );
+  // Navegación del simulador (12 preguntas secuenciales)
+  const allQuestions = useMemo(() => CASES_DATA.flatMap((c) => c.questions), []);
 
   const [currentQuestionIndex, setCurrentQuestionIndex] = useState<number>(() => {
     if (activeSession) {
@@ -1088,9 +1528,12 @@ export default function App() {
   const [isGrading, setIsGrading] = useState(false);
   const [showIntegralReportModal, setShowIntegralReportModal] = useState(false);
 
+  // Cuenta regresiva automática de 10 segundos tras descargar el PDF final
+  const [closingCountdown, setClosingCountdown] = useState<number | null>(null);
+
   const feedbackPanelRef = useRef<HTMLDivElement | null>(null);
 
-  // Estados de Vista Docente y sincronización con Google Sheets
+  // Estados de Vista Docente y sincronización sin bucles con Google Sheets
   const [isTeacherLoginOpen, setIsTeacherLoginOpen] = useState(false);
   const [isTeacherAuthenticated, setIsTeacherAuthenticated] = useState(false);
   const [loginUserInput, setLoginUserInput] = useState('');
@@ -1105,6 +1548,8 @@ export default function App() {
   const [teacherUserDraft, setTeacherUserDraft] = useState(config.teacherUser);
   const [teacherPassDraft, setTeacherPassDraft] = useState(config.teacherPass);
   const [configSavedNotice, setConfigSavedNotice] = useState('');
+
+  const isSyncingRef = useRef(false);
 
   const isSheetsConfigured = useMemo(() => {
     const url = (config.googleSheetsUrl || '').trim();
@@ -1140,6 +1585,29 @@ export default function App() {
     }
   }, [activeSession]);
 
+  // Temporizador de 10 segundos tras descargar el PDF: intenta cerrar pestaña y si el navegador bloquea, regresa al simulador
+  useEffect(() => {
+    if (closingCountdown === null) return;
+
+    if (closingCountdown <= 0) {
+      setClosingCountdown(null);
+      try {
+        window.close();
+      } catch {
+        // Bloqueado por política de seguridad del navegador
+      }
+      // Regresa limpiamente al simulador
+      setShowIntegralReportModal(false);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setClosingCountdown((prev) => (prev !== null ? prev - 1 : null));
+    }, 1000);
+
+    return () => window.clearTimeout(timer);
+  }, [closingCountdown]);
+
   // Atajo discreto de teclado Alt + D para abrir acceso docente
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1172,7 +1640,7 @@ export default function App() {
   }, [currentQuestion.id, existingAnswer]);
 
   // ============================================================================
-  // CONECTOR BIDIRECCIONAL CON GOOGLE SHEETS (v4.0)
+  // CONECTOR CON GOOGLE SHEETS (CON TIMEOUT DE 8s Y CONTROL ANTI-BUCLE)
   // ============================================================================
 
   const pushParticipantToSheets = async (record: ParticipantRecord) => {
@@ -1198,18 +1666,26 @@ export default function App() {
       },
     };
 
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+
     try {
       await fetch(config.googleSheetsUrl.trim(), {
         method: 'POST',
         headers: { 'Content-Type': 'text/plain;charset=utf-8' },
         body: JSON.stringify(payload),
+        signal: controller.signal,
       });
     } catch {
       // Respaldo silencioso: los datos siguen guardados en localStorage
+    } finally {
+      window.clearTimeout(timeoutId);
     }
   };
 
   const pullCohortFromSheets = async (overrideUrl?: string) => {
+    if (isSyncingRef.current) return;
+
     const targetUrl = (overrideUrl ?? config.googleSheetsUrl).trim();
     if (!targetUrl.startsWith('https://') || targetUrl.includes('PEGA_AQUI_TU_URL')) {
       setSheetsStatus('idle');
@@ -1217,34 +1693,63 @@ export default function App() {
       return;
     }
 
+    isSyncingRef.current = true;
     setSheetsStatus('syncing');
     setSheetsStatusMessage('Sincronizando registros con Google Sheets...');
 
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 8000);
+
     try {
-      const response = await fetch(targetUrl, { method: 'GET' });
+      const separator = targetUrl.includes('?') ? '&' : '?';
+      const response = await fetch(`${targetUrl}${separator}t=${Date.now()}`, {
+        method: 'GET',
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+
       const data = await response.json();
-      if (data && data.status === 'ok' && Array.isArray(data.records)) {
-        const remoteRecords: ParticipantRecord[] = data.records;
-        // Fusionar registros remotos con locales evitando duplicados por ID
+      const rawList = Array.isArray(data?.records)
+        ? data.records
+        : Array.isArray(data?.rows)
+          ? data.rows
+          : null;
+
+      if (data && data.status === 'ok' && rawList !== null) {
+        const remoteRecords = rawList
+          .map(normalizeParticipantRecord)
+          .filter((item): item is ParticipantRecord => item !== null);
+
         setCohort((prevLocal) => {
           const mergedMap = new Map<string, ParticipantRecord>();
           prevLocal.forEach((item) => mergedMap.set(item.id, item));
           remoteRecords.forEach((item) => {
-            if (item && item.id) {
-              mergedMap.set(item.id, item);
-            }
+            mergedMap.set(item.id, item);
           });
           return Array.from(mergedMap.values());
         });
+
         setSheetsStatus('connected');
         setSheetsStatusMessage(`Google Sheets Conectado (${remoteRecords.length} registros en nube).`);
       } else {
         setSheetsStatus('error');
         setSheetsStatusMessage('Respuesta inesperada de Google Apps Script.');
       }
-    } catch {
+    } catch (err) {
       setSheetsStatus('error');
-      setSheetsStatusMessage('No se pudo conectar con Google Sheets. Verifica permisos ("Cualquier persona").');
+      const isAbort = err instanceof Error && err.name === 'AbortError';
+      setSheetsStatusMessage(
+        isAbort
+          ? 'Tiempo de espera agotado (8s). Pulsa "Sincronizar Sheets" para reintentar.'
+          : 'No se pudo conectar con Google Sheets. Verifica acceso ("Cualquier persona").'
+      );
+    } finally {
+      window.clearTimeout(timeoutId);
+      isSyncingRef.current = false;
     }
   };
 
@@ -1252,13 +1757,14 @@ export default function App() {
     if (isTeacherAuthenticated && isSheetsConfigured) {
       pullCohortFromSheets();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isTeacherAuthenticated]);
 
   // ============================================================================
   // MANEJADORES DEL PARTICIPANTE
   // ============================================================================
 
-  const handleStartSimulation = async (e: React.FormEvent) => {
+  const handleStartSimulation = (e: React.FormEvent) => {
     e.preventDefault();
     setFormError('');
 
@@ -1306,7 +1812,7 @@ export default function App() {
     setSelectedOption(null);
     setJustificationText('');
 
-    await pushParticipantToSheets(newRecord);
+    void pushParticipantToSheets(newRecord);
   };
 
   const validWordCount = useMemo(
@@ -1321,14 +1827,12 @@ export default function App() {
     selectedOption !== null &&
     validWordCount >= 10;
 
-  // Mejora 1: Calificar en la misma pregunta, esperar retroalimentación y habilitar botón Siguiente
   const handleGradeCurrentQuestion = async () => {
     if (!activeSession || !selectedOption || existingAnswer || validWordCount < 10) return;
 
     setIsGrading(true);
 
-    // Breve pausa visual para mostrar procesamiento de evaluación y retroalimentación
-    await new Promise((resolve) => setTimeout(resolve, 420));
+    await new Promise((resolve) => setTimeout(resolve, 380));
 
     const evaluation = evaluateSocraticFeedback(
       currentQuestion,
@@ -1384,11 +1888,10 @@ export default function App() {
       return [updatedRecord, ...prev];
     });
 
-    await pushParticipantToSheets(updatedRecord);
+    void pushParticipantToSheets(updatedRecord);
 
     setIsGrading(false);
 
-    // Desplazamiento suave hacia la retroalimentación generada en la misma pregunta
     setTimeout(() => {
       feedbackPanelRef.current?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }, 100);
@@ -1399,29 +1902,16 @@ export default function App() {
       setCurrentQuestionIndex((prev) => prev + 1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
+      setClosingCountdown(null);
       setShowIntegralReportModal(true);
     }
   };
 
-  const handleChangeParticipant = () => {
-    setActiveSession(null);
-    setFullName('');
-    setDni('');
-    setEmail('');
-    setConsent(false);
-    setCurrentQuestionIndex(0);
-    setSelectedOption(null);
-    setJustificationText('');
-    setShowIntegralReportModal(false);
-  };
-
-  const handleOpenPdfReport = (record: ParticipantRecord) => {
-    const html = generatePrintableReportHtml(record, config);
-    const reportWindow = window.open('', '_blank', 'width=920,height=780');
-    if (reportWindow) {
-      reportWindow.document.open();
-      reportWindow.document.write(html);
-      reportWindow.document.close();
+  // Descarga directa en PC e inicio de contador automático de 10 segundos al finalizar
+  const handleDownloadDirectPdf = (record: ParticipantRecord, startAutoCloseCountdown = false) => {
+    downloadDirectPdfReport(record, config);
+    if (startAutoCloseCountdown) {
+      setClosingCountdown(10);
     }
   };
 
@@ -1458,7 +1948,11 @@ export default function App() {
       'Caso 3 (7.0 pts)',
       'Puntaje Total (20 pts)',
       'Nivel de Desempeño',
-      ...allQuestions.flatMap((q) => [`P${q.number} Respuesta`, `P${q.number} Puntos`, `P${q.number} Sustento`]),
+      ...allQuestions.flatMap((q) => [
+        `P${q.number} Respuesta`,
+        `P${q.number} Puntos`,
+        `P${q.number} Sustento`,
+      ]),
     ];
 
     const escapeCsv = (val: unknown) => {
@@ -1467,7 +1961,7 @@ export default function App() {
     };
 
     const rows = cohort.map((p) => {
-      const answeredCount = Object.keys(p.answers).length;
+      const answeredCount = Object.keys(p.answers || {}).length;
       return [
         p.fullName,
         `="${p.dni}"`,
@@ -1475,15 +1969,15 @@ export default function App() {
         formatTimestamp(p.startedAt),
         p.completedAt ? formatTimestamp(p.completedAt) : 'En curso',
         `${answeredCount} / 12`,
-        p.case1Score.toFixed(1),
-        p.case2Score.toFixed(1),
-        p.case3Score.toFixed(1),
-        p.totalScore.toFixed(1),
+        (Number(p.case1Score) || 0).toFixed(1),
+        (Number(p.case2Score) || 0).toFixed(1),
+        (Number(p.case3Score) || 0).toFixed(1),
+        (Number(p.totalScore) || 0).toFixed(1),
         p.level,
         ...allQuestions.flatMap((q) => {
-          const ans = p.answers[q.id];
+          const ans = p.answers?.[q.id];
           return ans
-            ? [ans.selectedOption, ans.pointsEarned.toFixed(1), ans.justification]
+            ? [ans.selectedOption, (Number(ans.pointsEarned) || 0).toFixed(1), ans.justification]
             : ['-', '0.0', ''];
         }),
       ]
@@ -1512,18 +2006,26 @@ export default function App() {
     setCohort([]);
     setActiveSession(null);
     localStorage.removeItem(STORAGE_KEYS.COHORT);
+    localStorage.removeItem(STORAGE_KEYS.LEGACY_COHORT);
     localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION);
+    localStorage.removeItem(STORAGE_KEYS.LEGACY_ACTIVE_SESSION);
 
     if (isSheetsConfigured) {
+      const controller = new AbortController();
+      const timeoutId = window.setTimeout(() => controller.abort(), 8000);
       try {
         await fetch(config.googleSheetsUrl.trim(), {
           method: 'POST',
           headers: { 'Content-Type': 'text/plain;charset=utf-8' },
           body: JSON.stringify({ action: 'clear' }),
+          signal: controller.signal,
         });
+        setSheetsStatus('connected');
         setSheetsStatusMessage('Plataforma y Google Sheets reiniciados a 0 participantes.');
       } catch {
         setSheetsStatusMessage('Tabla local reiniciada. Verifica limpieza manual en Google Sheets.');
+      } finally {
+        window.clearTimeout(timeoutId);
       }
     }
   };
@@ -1563,373 +2065,402 @@ export default function App() {
     e.preventDefault();
     const updated: AppConfig = {
       ...config,
-      googleSheetsUrl: sheetsUrlDraft.trim() || DEFAULT_CONFIG.googleSheetsUrl,
+      googleSheetsUrl: sheetsUrlDraft.trim() || FIXED_APPS_SCRIPT_URL,
       teacherUser: teacherUserDraft.trim() || DEFAULT_CONFIG.teacherUser,
       teacherPass: teacherPassDraft || DEFAULT_CONFIG.teacherPass,
     };
     setConfig(updated);
     setConfigSavedNotice('Configuración guardada correctamente.');
-    if (updated.googleSheetsUrl.startsWith('https://') && !updated.googleSheetsUrl.includes('PEGA_AQUI_TU_URL')) {
+    if (
+      updated.googleSheetsUrl.startsWith('https://') &&
+      !updated.googleSheetsUrl.includes('PEGA_AQUI_TU_URL')
+    ) {
       await pullCohortFromSheets(updated.googleSheetsUrl);
     }
     setTimeout(() => setConfigSavedNotice(''), 4000);
   };
 
   // ============================================================================
-  // RENDERIZADO: VISTA DOCENTE
+  // RENDERIZADO: VISTA DOCENTE (CON ESCUDO ERROR BOUNDARY)
   // ============================================================================
 
   if (isTeacherAuthenticated) {
-    const completedCount = cohort.filter((p) => Object.keys(p.answers).length >= 12).length;
+    const safeCohort = Array.isArray(cohort) ? cohort : [];
+    const completedCount = safeCohort.filter(
+      (p) => Object.keys(p.answers || {}).length >= 12
+    ).length;
     const averageScore =
-      cohort.length > 0
-        ? cohort.reduce((sum, p) => sum + p.totalScore, 0) / cohort.length
+      safeCohort.length > 0
+        ? safeCohort.reduce((sum, p) => sum + (Number(p.totalScore) || 0), 0) / safeCohort.length
         : 0;
 
     return (
-      <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col">
-        {/* Cabecera Vista Docente */}
-        <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-30">
-          <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
-            <div className="flex items-center gap-3">
-              <MidisOfficialEmblem customLogoUrl={config.customLogoDataUrl} compact />
-              <div>
-                <div className="flex items-center gap-2">
-                  <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-red-600 text-white">
-                    Panel Docente / Facilitador
-                  </span>
-                  {isSheetsConfigured ? (
-                    <span
-                      className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
-                        sheetsStatus === 'connected'
-                          ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
-                          : sheetsStatus === 'syncing'
-                            ? 'bg-amber-950 text-amber-300 border border-amber-700'
-                            : 'bg-rose-950 text-rose-300 border border-rose-700'
-                      }`}
-                    >
-                      <Cloud className="w-3.5 h-3.5" />
-                      {sheetsStatus === 'connected'
-                        ? 'Google Sheets Conectado'
-                        : sheetsStatus === 'syncing'
-                          ? 'Sincronizando...'
-                          : 'Revisar conexión Sheets'}
-                    </span>
-                  ) : (
-                    <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
-                      <CloudOff className="w-3.5 h-3.5" />
-                      Modo Local
-                    </span>
-                  )}
-                </div>
-                <h1 className="text-sm sm:text-base font-bold mt-1">{config.workshopTitle}</h1>
-              </div>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => setTeacherTab('resultados')}
-                className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1.5 transition ${
-                  teacherTab === 'resultados'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                <BarChart3 className="w-4 h-4" />
-                Resultados ({cohort.length})
-              </button>
-              <button
-                onClick={() => setTeacherTab('configuracion')}
-                className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1.5 transition ${
-                  teacherTab === 'configuracion'
-                    ? 'bg-white text-slate-900 shadow-xs'
-                    : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-                }`}
-              >
-                <Settings className="w-4 h-4" />
-                Configuración y Marca
-              </button>
-              <button
-                onClick={() => setIsTeacherAuthenticated(false)}
-                className="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium bg-red-600 hover:bg-red-700 text-white flex items-center gap-1.5 transition"
-              >
-                <LogOut className="w-4 h-4" />
-                Salir
-              </button>
-            </div>
-          </div>
-        </header>
-
-        <main className="max-w-7xl w-full mx-auto px-4 py-6 flex-1">
-          {teacherTab === 'resultados' ? (
-            <div className="space-y-6">
-              {/* Tarjetas resumen */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-                  <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
-                    <span>Participantes Registrados</span>
-                    <Users className="w-4 h-4 text-slate-700" />
-                  </div>
-                  <div className="text-2xl font-extrabold text-slate-900 mt-1">{cohort.length}</div>
-                  <div className="text-xs text-slate-500 mt-0.5">
-                    {completedCount} completaron las 12 preguntas
-                  </div>
-                </div>
-
-                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-                  <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
-                    <span>Promedio General (Base 20)</span>
-                    <Award className="w-4 h-4 text-red-600" />
-                  </div>
-                  <div className="text-2xl font-extrabold text-slate-900 mt-1">
-                    {averageScore.toFixed(1)} <span className="text-sm font-normal text-slate-500">/ 20.0 pts</span>
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5">Evaluación automática ponderada</div>
-                </div>
-
-                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
-                  <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
-                    <span>Estado de Base de Datos</span>
-                    <Database className="w-4 h-4 text-emerald-600" />
-                  </div>
-                  <div className="text-sm font-bold text-slate-800 mt-1.5">
-                    {sheetsStatusMessage || (isSheetsConfigured ? 'Listo para sincronizar' : 'Almacenamiento local')}
-                  </div>
-                  <div className="text-xs text-slate-500 mt-0.5">Sincronización en vivo por pregunta</div>
-                </div>
-              </div>
-
-              {/* Barra de acciones docentes */}
-              <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={() => pullCohortFromSheets()}
-                    disabled={!isSheetsConfigured || sheetsStatus === 'syncing'}
-                    className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white flex items-center gap-1.5 transition"
-                  >
-                    <RefreshCw className={`w-4 h-4 ${sheetsStatus === 'syncing' ? 'animate-spin' : ''}`} />
-                    Sincronizar Sheets
-                  </button>
-
-                  <button
-                    onClick={handleExportExcelCsv}
-                    disabled={cohort.length === 0}
-                    className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white flex items-center gap-1.5 transition"
-                  >
-                    <Download className="w-4 h-4" />
-                    Descargar Excel (CSV)
-                  </button>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    onClick={handleRestoreDemo}
-                    className="px-3 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1.5 transition"
-                  >
-                    <RotateCcw className="w-3.5 h-3.5" />
-                    Restaurar Demo
-                  </button>
-                  <button
-                    onClick={handleResetPlatform}
-                    className="px-3 py-2 rounded-lg text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-1.5 transition"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    Reiniciar Plataforma
-                  </button>
-                </div>
-              </div>
-
-              {/* Tabla de Resultados por Participante */}
-              <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
-                  <h2 className="font-bold text-slate-900 text-sm sm:text-base">
-                    Resultados por Participante
-                  </h2>
-                  <span className="text-xs text-slate-500">
-                    Incluye marcas de tiempo de ingreso y culminación
-                  </span>
-                </div>
-
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left border-collapse">
-                    <thead>
-                      <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-600">
-                        <th className="py-3 px-3">Participante</th>
-                        <th className="py-3 px-3">DNI</th>
-                        <th className="py-3 px-3">Hora de ingreso</th>
-                        <th className="py-3 px-3">Hora de fin</th>
-                        <th className="py-3 px-3">Progreso</th>
-                        <th className="py-3 px-3 text-right">C1</th>
-                        <th className="py-3 px-3 text-right">C2</th>
-                        <th className="py-3 px-3 text-right">C3</th>
-                        <th className="py-3 px-3 text-right">Total / 20</th>
-                        <th className="py-3 px-3 text-center">Reporte</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-200 text-xs sm:text-sm">
-                      {cohort.length === 0 ? (
-                        <tr>
-                          <td colSpan={10} className="py-10 px-4 text-center text-slate-500">
-                            No hay participantes registrados aún (0 registros). Comparte el enlace del simulador o presiona{' '}
-                            <strong>Sincronizar Sheets</strong>.
-                          </td>
-                        </tr>
-                      ) : (
-                        cohort.map((p) => {
-                          const answered = Object.keys(p.answers).length;
-                          return (
-                            <tr key={p.id} className="hover:bg-slate-50">
-                              <td className="py-3 px-3">
-                                <div className="font-semibold text-slate-900">{p.fullName}</div>
-                                <div className="text-xs text-slate-500">{p.email}</div>
-                              </td>
-                              <td className="py-3 px-3 font-mono text-xs text-slate-700">{p.dni}</td>
-                              <td className="py-3 px-3 text-xs text-slate-600 whitespace-nowrap">
-                                {formatTimestamp(p.startedAt)}
-                              </td>
-                              <td className="py-3 px-3 text-xs whitespace-nowrap">
-                                {p.completedAt ? (
-                                  <span className="text-slate-700 font-medium">
-                                    {formatTimestamp(p.completedAt)}
-                                  </span>
-                                ) : (
-                                  <span className="text-amber-600 font-medium">En curso</span>
-                                )}
-                              </td>
-                              <td className="py-3 px-3 text-xs font-medium">
-                                <span
-                                  className={`px-2 py-0.5 rounded-full ${
-                                    answered >= 12
-                                      ? 'bg-emerald-100 text-emerald-800'
-                                      : 'bg-amber-100 text-amber-800'
-                                  }`}
-                                >
-                                  {answered} / 12
-                                </span>
-                              </td>
-                              <td className="py-3 px-3 text-right text-xs">{p.case1Score.toFixed(1)}</td>
-                              <td className="py-3 px-3 text-right text-xs">{p.case2Score.toFixed(1)}</td>
-                              <td className="py-3 px-3 text-right text-xs">{p.case3Score.toFixed(1)}</td>
-                              <td className="py-3 px-3 text-right font-extrabold text-slate-900">
-                                {p.totalScore.toFixed(1)}
-                              </td>
-                              <td className="py-3 px-3 text-center">
-                                <button
-                                  onClick={() => handleOpenPdfReport(p)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium"
-                                >
-                                  <FileText className="w-3.5 h-3.5" />
-                                  PDF
-                                </button>
-                              </td>
-                            </tr>
-                          );
-                        })
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            </div>
-          ) : (
-            /* Pestaña Configuración Institucional y Marca */
-            <div className="max-w-3xl mx-auto bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
-              <div>
-                <h2 className="text-lg font-bold text-slate-900">
-                  Configuración Institucional, Marca y Conexión Google Sheets
-                </h2>
-                <p className="text-xs text-slate-500 mt-1">
-                  Personaliza el logotipo oficial, las credenciales docentes y la URL de sincronización en nube.
-                </p>
-              </div>
-
-              {configSavedNotice && (
-                <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  {configSavedNotice}
-                </div>
-              )}
-
-              <div className="border border-slate-200 rounded-lg p-4 bg-slate-50 space-y-3">
-                <div className="text-xs font-bold uppercase text-slate-700">
-                  Logotipo Institucional Actual
-                </div>
-                <div className="flex flex-wrap items-center justify-between gap-4">
-                  <MidisOfficialEmblem customLogoUrl={config.customLogoDataUrl} />
+      <TeacherErrorBoundary onExit={() => setIsTeacherAuthenticated(false)}>
+        <div className="min-h-screen bg-slate-100 text-slate-900 flex flex-col">
+          {/* Cabecera Vista Docente */}
+          <header className="bg-slate-900 text-white border-b border-slate-800 sticky top-0 z-30">
+            <div className="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <MidisOfficialEmblem customLogoUrl={config.customLogoDataUrl} compact />
+                <div>
                   <div className="flex items-center gap-2">
-                    <label className="cursor-pointer px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5">
-                      <Upload className="w-3.5 h-3.5" />
-                      Subir PNG/JPG oficial
-                      <input
-                        type="file"
-                        accept="image/png,image/jpeg,image/webp"
-                        onChange={handleLogoFileUpload}
-                        className="hidden"
-                      />
-                    </label>
-                    {config.customLogoDataUrl && (
-                      <button
-                        type="button"
-                        onClick={() => setConfig((prev) => ({ ...prev, customLogoDataUrl: null }))}
-                        className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                    <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded bg-red-600 text-white">
+                      Panel Docente / Facilitador
+                    </span>
+                    {isSheetsConfigured ? (
+                      <span
+                        className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${
+                          sheetsStatus === 'connected'
+                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-700'
+                            : sheetsStatus === 'syncing'
+                              ? 'bg-amber-950 text-amber-300 border border-amber-700'
+                              : 'bg-rose-950 text-rose-300 border border-rose-700'
+                        }`}
                       >
-                        Usar emblema base
-                      </button>
+                        <Cloud className="w-3.5 h-3.5" />
+                        {sheetsStatus === 'connected'
+                          ? 'Google Sheets Conectado'
+                          : sheetsStatus === 'syncing'
+                            ? 'Sincronizando...'
+                            : 'Revisar conexión Sheets'}
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full bg-slate-800 text-slate-300 border border-slate-700">
+                        <CloudOff className="w-3.5 h-3.5" />
+                        Modo Local
+                      </span>
                     )}
                   </div>
+                  <h1 className="text-sm sm:text-base font-bold mt-1">{config.workshopTitle}</h1>
                 </div>
               </div>
 
-              <form onSubmit={handleSaveInstitutionSettings} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 mb-1">
-                    URL de Aplicación Web de Google Apps Script (/exec)
-                  </label>
-                  <input
-                    type="text"
-                    value={sheetsUrlDraft}
-                    onChange={(e) => setSheetsUrlDraft(e.target.value)}
-                    placeholder="https://script.google.com/macros/s/.../exec"
-                    className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-red-600"
-                  />
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Usuario Docente
-                    </label>
-                    <input
-                      type="text"
-                      value={teacherUserDraft}
-                      onChange={(e) => setTeacherUserDraft(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-bold text-slate-700 mb-1">
-                      Clave Docente
-                    </label>
-                    <input
-                      type="text"
-                      value={teacherPassDraft}
-                      onChange={(e) => setTeacherPassDraft(e.target.value)}
-                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
-                    />
-                  </div>
-                </div>
-
+              <div className="flex items-center gap-2">
                 <button
-                  type="submit"
-                  className="px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold transition"
+                  onClick={() => setTeacherTab('resultados')}
+                  className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1.5 transition ${
+                    teacherTab === 'resultados'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
                 >
-                  Guardar configuración y probar conexión
+                  <BarChart3 className="w-4 h-4" />
+                  Resultados ({safeCohort.length})
                 </button>
-              </form>
+                <button
+                  onClick={() => setTeacherTab('configuracion')}
+                  className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium flex items-center gap-1.5 transition ${
+                    teacherTab === 'configuracion'
+                      ? 'bg-white text-slate-900 shadow-xs'
+                      : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
+                  }`}
+                >
+                  <Settings className="w-4 h-4" />
+                  Configuración y Marca
+                </button>
+                <button
+                  onClick={() => setIsTeacherAuthenticated(false)}
+                  className="px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium bg-red-600 hover:bg-red-700 text-white flex items-center gap-1.5 transition"
+                >
+                  <LogOut className="w-4 h-4" />
+                  Salir
+                </button>
+              </div>
             </div>
-          )}
-        </main>
-      </div>
+          </header>
+
+          <main className="max-w-7xl w-full mx-auto px-4 py-6 flex-1">
+            {teacherTab === 'resultados' ? (
+              <div className="space-y-6">
+                {/* Tarjetas resumen */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
+                    <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
+                      <span>Participantes Registrados</span>
+                      <Users className="w-4 h-4 text-slate-700" />
+                    </div>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      {safeCohort.length}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      {completedCount} completaron las 12 preguntas
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
+                    <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
+                      <span>Promedio General (Base 20)</span>
+                      <Award className="w-4 h-4 text-red-600" />
+                    </div>
+                    <div className="text-2xl font-extrabold text-slate-900 mt-1">
+                      {averageScore.toFixed(1)}{' '}
+                      <span className="text-sm font-normal text-slate-500">/ 20.0 pts</span>
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      Evaluación automática ponderada
+                    </div>
+                  </div>
+
+                  <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
+                    <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
+                      <span>Estado de Base de Datos</span>
+                      <Database className="w-4 h-4 text-emerald-600" />
+                    </div>
+                    <div className="text-sm font-bold text-slate-800 mt-1.5">
+                      {sheetsStatusMessage ||
+                        (isSheetsConfigured ? 'Listo para sincronizar' : 'Almacenamiento local')}
+                    </div>
+                    <div className="text-xs text-slate-500 mt-0.5">
+                      Sincronización controlada con Google Sheets
+                    </div>
+                  </div>
+                </div>
+
+                {/* Barra de acciones docentes */}
+                <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => pullCohortFromSheets()}
+                      disabled={!isSheetsConfigured || sheetsStatus === 'syncing'}
+                      className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-slate-900 hover:bg-slate-800 disabled:opacity-50 text-white flex items-center gap-1.5 transition"
+                    >
+                      <RefreshCw
+                        className={`w-4 h-4 ${sheetsStatus === 'syncing' ? 'animate-spin' : ''}`}
+                      />
+                      Sincronizar Sheets
+                    </button>
+
+                    <button
+                      onClick={handleExportExcelCsv}
+                      disabled={safeCohort.length === 0}
+                      className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white flex items-center gap-1.5 transition"
+                    >
+                      <Download className="w-4 h-4" />
+                      Descargar Excel (CSV)
+                    </button>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={handleRestoreDemo}
+                      className="px-3 py-2 rounded-lg text-xs font-medium bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 flex items-center gap-1.5 transition"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                      Restaurar Demo
+                    </button>
+                    <button
+                      onClick={handleResetPlatform}
+                      className="px-3 py-2 rounded-lg text-xs font-semibold bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 flex items-center gap-1.5 transition"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Reiniciar Plataforma
+                    </button>
+                  </div>
+                </div>
+
+                {/* Tabla de Resultados por Participante */}
+                <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-200 flex items-center justify-between">
+                    <h2 className="font-bold text-slate-900 text-sm sm:text-base">
+                      Resultados por Participante
+                    </h2>
+                    <span className="text-xs text-slate-500">
+                      Incluye marcas de tiempo de ingreso y culminación
+                    </span>
+                  </div>
+
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left border-collapse">
+                      <thead>
+                        <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-600">
+                          <th className="py-3 px-3">Participante</th>
+                          <th className="py-3 px-3">DNI</th>
+                          <th className="py-3 px-3">Hora de ingreso</th>
+                          <th className="py-3 px-3">Hora de fin</th>
+                          <th className="py-3 px-3">Progreso</th>
+                          <th className="py-3 px-3 text-right">C1</th>
+                          <th className="py-3 px-3 text-right">C2</th>
+                          <th className="py-3 px-3 text-right">C3</th>
+                          <th className="py-3 px-3 text-right">Total / 20</th>
+                          <th className="py-3 px-3 text-center">Reporte</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-200 text-xs sm:text-sm">
+                        {safeCohort.length === 0 ? (
+                          <tr>
+                            <td colSpan={10} className="py-10 px-4 text-center text-slate-500">
+                              No hay participantes registrados aún (0 registros). Comparte el enlace
+                              del simulador o presiona <strong>Sincronizar Sheets</strong>.
+                            </td>
+                          </tr>
+                        ) : (
+                          safeCohort.map((p) => {
+                            const answered = Object.keys(p.answers || {}).length;
+                            return (
+                              <tr key={p.id} className="hover:bg-slate-50">
+                                <td className="py-3 px-3">
+                                  <div className="font-semibold text-slate-900">{p.fullName}</div>
+                                  <div className="text-xs text-slate-500">{p.email}</div>
+                                </td>
+                                <td className="py-3 px-3 font-mono text-xs text-slate-700">
+                                  {p.dni}
+                                </td>
+                                <td className="py-3 px-3 text-xs text-slate-600 whitespace-nowrap">
+                                  {formatTimestamp(p.startedAt)}
+                                </td>
+                                <td className="py-3 px-3 text-xs whitespace-nowrap">
+                                  {p.completedAt ? (
+                                    <span className="text-slate-700 font-medium">
+                                      {formatTimestamp(p.completedAt)}
+                                    </span>
+                                  ) : (
+                                    <span className="text-amber-600 font-medium">En curso</span>
+                                  )}
+                                </td>
+                                <td className="py-3 px-3 text-xs font-medium">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full ${
+                                      answered >= 12
+                                        ? 'bg-emerald-100 text-emerald-800'
+                                        : 'bg-amber-100 text-amber-800'
+                                    }`}
+                                  >
+                                    {answered} / 12
+                                  </span>
+                                </td>
+                                <td className="py-3 px-3 text-right text-xs">
+                                  {(Number(p.case1Score) || 0).toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-right text-xs">
+                                  {(Number(p.case2Score) || 0).toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-right text-xs">
+                                  {(Number(p.case3Score) || 0).toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-right font-extrabold text-slate-900">
+                                  {(Number(p.totalScore) || 0).toFixed(1)}
+                                </td>
+                                <td className="py-3 px-3 text-center">
+                                  <button
+                                    onClick={() => handleDownloadDirectPdf(p, false)}
+                                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium"
+                                  >
+                                    <FileText className="w-3.5 h-3.5" />
+                                    PDF
+                                  </button>
+                                </td>
+                              </tr>
+                            );
+                          })
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Pestaña Configuración Institucional y Marca */
+              <div className="max-w-3xl mx-auto bg-white rounded-xl border border-slate-200 p-6 shadow-xs space-y-6">
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">
+                    Configuración Institucional, Marca y Conexión Google Sheets
+                  </h2>
+                  <p className="text-xs text-slate-500 mt-1">
+                    Personaliza el logotipo oficial, las credenciales docentes y la URL de
+                    sincronización en nube.
+                  </p>
+                </div>
+
+                {configSavedNotice && (
+                  <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs font-medium flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 shrink-0" />
+                    {configSavedNotice}
+                  </div>
+                )}
+
+                <div className="border border-slate-200 rounded-lg p-4 bg-slate-50 space-y-3">
+                  <div className="text-xs font-bold uppercase text-slate-700">
+                    Logotipo Institucional Actual
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-4">
+                    <MidisOfficialEmblem customLogoUrl={config.customLogoDataUrl} />
+                    <div className="flex items-center gap-2">
+                      <label className="cursor-pointer px-3 py-2 rounded-lg bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold inline-flex items-center gap-1.5">
+                        <Upload className="w-3.5 h-3.5" />
+                        Subir PNG/JPG oficial
+                        <input
+                          type="file"
+                          accept="image/png,image/jpeg,image/webp"
+                          onChange={handleLogoFileUpload}
+                          className="hidden"
+                        />
+                      </label>
+                      {config.customLogoDataUrl && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setConfig((prev) => ({ ...prev, customLogoDataUrl: null }))
+                          }
+                          className="px-3 py-2 rounded-lg bg-white border border-slate-300 text-xs font-medium text-slate-700 hover:bg-slate-100"
+                        >
+                          Usar emblema base
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <form onSubmit={handleSaveInstitutionSettings} className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      URL de Aplicación Web de Google Apps Script (/exec)
+                    </label>
+                    <input
+                      type="text"
+                      value={sheetsUrlDraft}
+                      onChange={(e) => setSheetsUrlDraft(e.target.value)}
+                      placeholder="https://script.google.com/macros/s/.../exec"
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-red-600"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Usuario Docente
+                      </label>
+                      <input
+                        type="text"
+                        value={teacherUserDraft}
+                        onChange={(e) => setTeacherUserDraft(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-xs font-bold text-slate-700 mb-1">
+                        Clave Docente
+                      </label>
+                      <input
+                        type="text"
+                        value={teacherPassDraft}
+                        onChange={(e) => setTeacherPassDraft(e.target.value)}
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-600"
+                      />
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    className="px-4 py-2.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-semibold transition"
+                  >
+                    Guardar configuración y probar conexión
+                  </button>
+                </form>
+              </div>
+            )}
+          </main>
+        </div>
+      </TeacherErrorBoundary>
     );
   }
 
@@ -1942,7 +2473,7 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 flex flex-col">
-      {/* Cabecera Institucional */}
+      {/* Cabecera Institucional (sin pestaña/botón "Cambiar participante") */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-20 shadow-2xs">
         <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-3">
@@ -1965,21 +2496,17 @@ export default function App() {
               <div className="px-3 py-1.5 rounded-lg bg-slate-900 text-white text-xs font-bold flex items-center gap-1.5">
                 <Award className="w-4 h-4 text-amber-400" />
                 <span>
-                  Puntaje acumulado ({answeredCount}/12): {activeSession.totalScore.toFixed(1)} / 20.0 pts
+                  Puntaje acumulado ({answeredCount}/12): {activeSession.totalScore.toFixed(1)} /
+                  20.0 pts
                 </span>
               </div>
               <button
-                onClick={() => handleOpenPdfReport(activeSession)}
+                type="button"
+                onClick={() => handleDownloadDirectPdf(activeSession, false)}
                 className="px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-semibold flex items-center gap-1.5 transition"
               >
                 <FileText className="w-3.5 h-3.5" />
                 Ver Reporte Integral
-              </button>
-              <button
-                onClick={handleChangeParticipant}
-                className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-medium transition"
-              >
-                Cambiar participante
               </button>
             </div>
           )}
@@ -1989,7 +2516,7 @@ export default function App() {
       {/* Contenido Principal */}
       <main className="max-w-6xl w-full mx-auto px-4 py-6 flex-1">
         {!activeSession ? (
-          /* Pantalla de Identificación del Participante (Formulario limpio de 3 campos + 2 reglas) */
+          /* Pantalla de Identificación del Participante */
           <div className="max-w-2xl mx-auto space-y-6">
             <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-8 shadow-xs">
               <div className="flex items-center gap-2 text-red-700 text-xs font-bold uppercase tracking-wider mb-2">
@@ -2000,10 +2527,10 @@ export default function App() {
                 Identificación del Participante
               </h2>
               <p className="text-sm text-slate-600 mt-1">
-                Completa tus datos para iniciar el análisis de los 3 casos prácticos articulados con los servicios y Programas Sociales del MIDIS.
+                Completa tus datos para iniciar el análisis de los 3 casos prácticos articulados
+                con los servicios y Programas Sociales del MIDIS.
               </p>
 
-              {/* Reglas simplificadas (únicamente Regla 1 y Regla 2) */}
               <div className="mt-5 grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
                   <div className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
@@ -2011,7 +2538,9 @@ export default function App() {
                     Regla 1: Intento único y avance secuencial
                   </div>
                   <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                    Cada una de las 12 preguntas admite un solo intento puntuable (20.0 pts en total), requiere sustento obligatorio y desbloquea la siguiente pregunta al calificarse.
+                    Cada una de las 12 preguntas admite un solo intento puntuable (20.0 pts en
+                    total), requiere sustento obligatorio y desbloquea la siguiente pregunta al
+                    calificarse.
                   </p>
                 </div>
 
@@ -2021,7 +2550,8 @@ export default function App() {
                     Regla 2: Retroalimentación y reporte integral
                   </div>
                   <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                    Recibirás retroalimentación socrática inmediata por cada decisión y podrás descargar tu Reporte Integral en PDF con recomendaciones territoriales.
+                    Recibirás retroalimentación socrática inmediata por cada decisión y podrás
+                    descargar tu Reporte Integral en PDF con recomendaciones territoriales.
                   </p>
                 </div>
               </div>
@@ -2088,7 +2618,8 @@ export default function App() {
                     className="mt-0.5 rounded border-slate-300 text-red-600 focus:ring-red-600"
                   />
                   <span className="text-xs text-slate-600 leading-relaxed">
-                    Autorizo el registro de mis respuestas, puntaje y marcas horarias con fines académicos y de seguimiento del taller virtual del MIDIS.
+                    Autorizo el registro de mis respuestas, puntaje y marcas horarias con fines
+                    académicos y de seguimiento del taller virtual del MIDIS.
                   </span>
                 </label>
 
@@ -2112,7 +2643,8 @@ export default function App() {
                   Progreso secuencial: {answeredCount} de 12 preguntas calificadas
                 </div>
                 <div className="text-xs text-slate-500">
-                  Pregunta actual: <strong className="text-slate-900">{currentQuestion.number}</strong> ({currentQuestion.points.toFixed(1)} pts)
+                  Pregunta actual: <strong className="text-slate-900">{currentQuestion.number}</strong>{' '}
+                  ({currentQuestion.points.toFixed(1)} pts)
                 </div>
               </div>
 
@@ -2131,7 +2663,7 @@ export default function App() {
                       title={
                         isUnlocked
                           ? `Pregunta ${q.number}${ans ? ` (${ans.pointsEarned.toFixed(1)} pts)` : ''}`
-                          : `Bloqueada: responde primero la pregunta anterior`
+                          : 'Bloqueada: responde primero la pregunta anterior'
                       }
                       className={`py-1.5 px-1 rounded-lg text-xs font-bold border flex items-center justify-center gap-1 transition ${
                         isCurrent
@@ -2153,7 +2685,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Tarjeta del Escenario del Caso (Sin pistas) */}
+            {/* Tarjeta del Escenario del Caso */}
             <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
                 <div>
@@ -2176,7 +2708,7 @@ export default function App() {
               </div>
             </section>
 
-            {/* Tarjeta de Pregunta Actual, Alternativas, Sustento y Retroalimentación en la misma vista */}
+            {/* Tarjeta de Pregunta Actual, Alternativas, Sustento y Retroalimentación */}
             <section className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-xs space-y-5">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="flex items-center gap-2">
@@ -2336,7 +2868,8 @@ export default function App() {
                           : 'bg-rose-700 text-white'
                       }`}
                     >
-                      Puntaje obtenido: +{existingAnswer.pointsEarned.toFixed(1)} / {currentQuestion.points.toFixed(1)} pts
+                      Puntaje obtenido: +{existingAnswer.pointsEarned.toFixed(1)} /{' '}
+                      {currentQuestion.points.toFixed(1)} pts
                     </span>
                   </div>
 
@@ -2366,7 +2899,6 @@ export default function App() {
                     </div>
                   </div>
 
-                  {/* Controles de navegación tras leer la retroalimentación */}
                   <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
                     <button
                       type="button"
@@ -2403,7 +2935,7 @@ export default function App() {
         )}
       </main>
 
-      {/* Modal de Reporte Integral al concluir las 12 preguntas */}
+      {/* Modal de Reporte Integral con descarga directa en PC y cuenta regresiva de 10s */}
       {showIntegralReportModal && activeSession && (
         <div className="fixed inset-0 z-40 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-xl border border-slate-200 space-y-4">
@@ -2440,17 +2972,45 @@ export default function App() {
               </div>
             </div>
 
+            {/* Barra de cuenta regresiva automática tras descargar PDF */}
+            {closingCountdown !== null && (
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 space-y-2">
+                <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
+                  <span className="flex items-center gap-1.5">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    Reporte PDF descargado en tu equipo.
+                  </span>
+                  <span className="px-2 py-0.5 rounded bg-emerald-700 text-white font-mono">
+                    {closingCountdown}s
+                  </span>
+                </div>
+                <p className="text-xs text-emerald-800">
+                  Finalizando ventana en <strong>{closingCountdown} segundos</strong> y regresando
+                  al simulador...
+                </p>
+                <div className="w-full h-1.5 bg-emerald-200 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-emerald-600 transition-all duration-1000 ease-linear"
+                    style={{ width: `${(closingCountdown / 10) * 100}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => setShowIntegralReportModal(false)}
+                onClick={() => {
+                  setClosingCountdown(null);
+                  setShowIntegralReportModal(false);
+                }}
                 className="px-4 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50"
               >
-                Revisar respuestas
+                {closingCountdown !== null ? 'Regresar ahora al simulador' : 'Revisar respuestas'}
               </button>
               <button
                 type="button"
-                onClick={() => handleOpenPdfReport(activeSession)}
+                onClick={() => handleDownloadDirectPdf(activeSession, true)}
                 className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5"
               >
                 <Download className="w-4 h-4" />
