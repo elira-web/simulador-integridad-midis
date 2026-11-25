@@ -119,7 +119,7 @@ interface AppConfig {
 }
 
 // ============================================================================
-// CONFIGURACIÓN INICIAL (v5.2.0)
+// CONFIGURACIÓN INICIAL (v5.2.1)
 // ============================================================================
 
 const STORAGE_KEYS = {
@@ -1888,7 +1888,7 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
 };
 
 // ============================================================================
-// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.2.0)
+// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.2.1)
 // ============================================================================
 
 export default function App() {
@@ -2670,6 +2670,21 @@ export default function App() {
                     </div>
                   </div>
                 </div>
+
+                {sheetsStatusMessage && (
+                  <div
+                    className={`rounded-xl border px-4 py-2.5 text-xs font-medium flex items-center gap-2 ${
+                      sheetsStatus === 'error'
+                        ? 'bg-rose-50 border-rose-200 text-rose-800'
+                        : sheetsStatus === 'connected'
+                          ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                          : 'bg-white border-slate-200 text-slate-700'
+                    }`}
+                  >
+                    <Cloud className="w-4 h-4 shrink-0" />
+                    <span>{sheetsStatusMessage}</span>
+                  </div>
+                )}
 
                 <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-wrap items-center justify-between gap-3">
                   <div className="flex flex-wrap items-center gap-2">
