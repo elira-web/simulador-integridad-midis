@@ -29,6 +29,8 @@ import {
   Database,
   Trash2,
   RotateCcw,
+  ExternalLink,
+  Home,
 } from 'lucide-react';
 
 // ============================================================================
@@ -110,12 +112,14 @@ interface AppConfig {
   workshopTitle: string;
   customLogoDataUrl: string | null;
   googleSheetsUrl: string;
+  googleSpreadsheetUrl: string;
+  googleSpreadsheetName: string;
   teacherUser: string;
   teacherPass: string;
 }
 
 // ============================================================================
-// CONFIGURACIÓN INICIAL (URL ACTIVA DE GOOGLE APPS SCRIPT FIJADA EN v5.0.1)
+// CONFIGURACIÓN INICIAL (v5.2.0)
 // ============================================================================
 
 const STORAGE_KEYS = {
@@ -134,6 +138,8 @@ const DEFAULT_CONFIG: AppConfig = {
   workshopTitle: 'Integridad en la gestión pública para la entrega de servicios',
   customLogoDataUrl: null,
   googleSheetsUrl: FIXED_APPS_SCRIPT_URL,
+  googleSpreadsheetUrl: '',
+  googleSpreadsheetName: 'Resultados_Taller_Integridad_MIDIS',
   teacherUser: 'docente.midis',
   teacherPass: 'Integridad2026',
 };
@@ -883,8 +889,459 @@ const evaluateSocraticFeedback = (
 };
 
 // ============================================================================
-// GENERADOR NATIVO DE DESCARGA DIRECTA PDF EN PC (SIN POPUPS NI DEPENDENCIAS)
+// GENERADOR NATIVO DE EXCEL (.XLSX OPENXML) EN UNA SOLA HOJA CONSOLIDADA
 // ============================================================================
+
+const escapeXml = (value: string): string => {
+  return value
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
+};
+
+const getExcelColName = (indexZeroBased: number): string => {
+  let n = indexZeroBased + 1;
+  let name = '';
+  while (n > 0) {
+    const rem = (n - 1) % 26;
+    name = String.fromCharCode(65 + rem) + name;
+    n = Math.floor((n - 1) / 26);
+  }
+  return name;
+};
+
+type ExcelCellInput = string | number;
+
+const buildSingleWorksheetXml = (
+  rows: ExcelCellInput[][],
+  columnWidths: number[]
+): string => {
+  const colsXml = columnWidths
+    .map(
+      (w: number, idx: number) =>
+        `<col min="${idx + 1}" max="${idx + 1}" width="${w}" customWidth="1"/>`
+    )
+    .join('');
+
+  const rowsXml = rows
+    .map((row: ExcelCellInput[], rIdx: number) => {
+      const rowNum = rIdx + 1;
+      const isHeader = rIdx === 0;
+      const styleAttr = isHeader ? ' s="1"' : ' s="2"';
+      const cellsXml = row
+        .map((cellVal: ExcelCellInput, cIdx: number) => {
+          const cellRef = `${getExcelColName(cIdx)}${rowNum}`;
+          if (typeof cellVal === 'number' && Number.isFinite(cellVal) && !isHeader) {
+            return `<c r="${cellRef}" s="3" t="n"><v>${cellVal}</v></c>`;
+          }
+          const safeText = escapeXml(String(cellVal ?? ''));
+          return `<c r="${cellRef}"${styleAttr} t="inlineStr"><is><t xml:space="preserve">${safeText}</t></is></c>`;
+        })
+        .join('');
+      const heightAttr = isHeader ? ' ht="26" customHeight="1"' : '';
+      return `<row r="${rowNum}"${heightAttr}>${cellsXml}</row>`;
+    })
+    .join('');
+
+  return `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <sheetViews>
+    <sheetView workbookViewId="0">
+      <pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/>
+    </sheetView>
+  </sheetViews>
+  <cols>${colsXml}</cols>
+  <sheetData>${rowsXml}</sheetData>
+</worksheet>`;
+};
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let k = 0; k < 8; k++) {
+      c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    }
+    table[i] = c >>> 0;
+  }
+  return table;
+})();
+
+const computeCrc32 = (data: Uint8Array): number => {
+  let crc = 0xffffffff;
+  for (let i = 0; i < data.length; i++) {
+    crc = CRC32_TABLE[(crc ^ data[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+};
+
+const buildZipArchive = (files: { name: string; content: string }[]): Blob => {
+  const encoder = new TextEncoder();
+  const localParts: Uint8Array[] = [];
+  const centralParts: Uint8Array[] = [];
+  let offset = 0;
+
+  for (const file of files) {
+    const nameBytes = encoder.encode(file.name);
+    const dataBytes = encoder.encode(file.content);
+    const crc = computeCrc32(dataBytes);
+
+    const localHeader = new Uint8Array(30 + nameBytes.length);
+    const lv = new DataView(localHeader.buffer);
+    lv.setUint32(0, 0x04034b50, true);
+    lv.setUint16(4, 20, true);
+    lv.setUint16(6, 0x0800, true);
+    lv.setUint16(8, 0, true);
+    lv.setUint16(10, 0, true);
+    lv.setUint16(12, 0x0021, true);
+    lv.setUint32(14, crc, true);
+    lv.setUint32(18, dataBytes.length, true);
+    lv.setUint32(22, dataBytes.length, true);
+    lv.setUint16(26, nameBytes.length, true);
+    lv.setUint16(28, 0, true);
+    localHeader.set(nameBytes, 30);
+
+    localParts.push(localHeader, dataBytes);
+
+    const centralHeader = new Uint8Array(46 + nameBytes.length);
+    const cv = new DataView(centralHeader.buffer);
+    cv.setUint32(0, 0x02014b50, true);
+    cv.setUint16(4, 20, true);
+    cv.setUint16(6, 20, true);
+    cv.setUint16(8, 0x0800, true);
+    cv.setUint16(10, 0, true);
+    cv.setUint16(12, 0, true);
+    cv.setUint16(14, 0x0021, true);
+    cv.setUint32(16, crc, true);
+    cv.setUint32(20, dataBytes.length, true);
+    cv.setUint32(24, dataBytes.length, true);
+    cv.setUint16(28, nameBytes.length, true);
+    cv.setUint16(30, 0, true);
+    cv.setUint16(32, 0, true);
+    cv.setUint16(34, 0, true);
+    cv.setUint16(36, 0, true);
+    cv.setUint32(38, 0, true);
+    cv.setUint32(42, offset, true);
+    centralHeader.set(nameBytes, 46);
+
+    centralParts.push(centralHeader);
+    offset += localHeader.length + dataBytes.length;
+  }
+
+  const centralSize = centralParts.reduce((sum: number, p: Uint8Array) => sum + p.length, 0);
+  const eocd = new Uint8Array(22);
+  const ev = new DataView(eocd.buffer);
+  ev.setUint32(0, 0x06054b50, true);
+  ev.setUint16(4, 0, true);
+  ev.setUint16(6, 0, true);
+  ev.setUint16(8, files.length, true);
+  ev.setUint16(10, files.length, true);
+  ev.setUint32(12, centralSize, true);
+  ev.setUint32(16, offset, true);
+  ev.setUint16(20, 0, true);
+
+  return new Blob(
+    [
+      ...(localParts as BlobPart[]),
+      ...(centralParts as BlobPart[]),
+      eocd as BlobPart,
+    ],
+    {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    }
+  );
+};
+
+const exportCohortToSingleSheetExcel = (
+  cohort: ParticipantRecord[],
+  allQuestions: CaseQuestion[]
+): void => {
+  const headers: ExcelCellInput[] = [
+    'Participante',
+    'DNI',
+    'Correo Electrónico',
+    'Hora de ingreso',
+    'Hora de fin',
+    'Progreso',
+    'Caso 1 (6.5 pts)',
+    'Caso 2 (6.5 pts)',
+    'Caso 3 (7.0 pts)',
+    'Puntaje Total (20 pts)',
+    'Nivel de Desempeño',
+    ...allQuestions.flatMap((q: CaseQuestion) => [
+      `P${q.number} Respuesta`,
+      `P${q.number} Puntos`,
+      `P${q.number} Sustento`,
+    ]),
+  ];
+
+  const colWidths: number[] = [
+    34,
+    13,
+    28,
+    20,
+    20,
+    13,
+    15,
+    15,
+    15,
+    18,
+    36,
+    ...allQuestions.flatMap(() => [14, 13, 52]),
+  ];
+
+  const rows: ExcelCellInput[][] = [headers];
+
+  for (const p of cohort) {
+    const answeredCount = Object.keys(p.answers || {}).length;
+    rows.push([
+      p.fullName,
+      p.dni,
+      p.email,
+      formatTimestamp(p.startedAt),
+      p.completedAt ? formatTimestamp(p.completedAt) : 'En curso',
+      `${answeredCount} / 12`,
+      Number((Number(p.case1Score) || 0).toFixed(1)),
+      Number((Number(p.case2Score) || 0).toFixed(1)),
+      Number((Number(p.case3Score) || 0).toFixed(1)),
+      Number((Number(p.totalScore) || 0).toFixed(1)),
+      p.level,
+      ...allQuestions.flatMap((q: CaseQuestion): ExcelCellInput[] => {
+        const ans = p.answers?.[q.id];
+        return ans
+          ? [
+              ans.selectedOption,
+              Number((Number(ans.pointsEarned) || 0).toFixed(1)),
+              ans.justification,
+            ]
+          : ['-', 0, ''];
+      }),
+    ]);
+  }
+
+  const sheet1Xml = buildSingleWorksheetXml(rows, colWidths);
+
+  const contentTypesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
+  <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
+  <Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/>
+</Types>`;
+
+  const relsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/>
+</Relationships>`;
+
+  const workbookXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
+  <sheets>
+    <sheet name="Resultados_MIDIS" sheetId="1" r:id="rId1"/>
+  </sheets>
+</workbook>`;
+
+  const workbookRelsXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
+  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`;
+
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main">
+  <fonts count="2">
+    <font><sz val="10"/><name val="Calibri"/></font>
+    <font><b/><sz val="10"/><color rgb="FFFFFFFF"/><name val="Calibri"/></font>
+  </fonts>
+  <fills count="3">
+    <fill><patternFill patternType="none"/></fill>
+    <fill><patternFill patternType="gray125"/></fill>
+    <fill><patternFill patternType="solid"><fgColor rgb="FF1E293B"/><bgColor indexed="64"/></patternFill></fill>
+  </fills>
+  <borders count="2">
+    <border/>
+    <border>
+      <left style="thin"><color rgb="FFCBD5E1"/></left>
+      <right style="thin"><color rgb="FFCBD5E1"/></right>
+      <top style="thin"><color rgb="FFCBD5E1"/></top>
+      <bottom style="thin"><color rgb="FFCBD5E1"/></bottom>
+    </border>
+  </borders>
+  <cellStyleXfs count="1">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0"/>
+  </cellStyleXfs>
+  <cellXfs count="4">
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>
+    <xf numFmtId="0" fontId="1" fillId="2" borderId="1" xfId="0" applyFont="1" applyFill="1" applyBorder="1">
+      <alignment vertical="center" wrapText="1"/>
+    </xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" applyBorder="1">
+      <alignment vertical="top" wrapText="1"/>
+    </xf>
+    <xf numFmtId="2" fontId="0" fillId="0" borderId="1" xfId="0" applyNumberFormat="1" applyBorder="1">
+      <alignment vertical="top" horizontal="right"/>
+    </xf>
+  </cellXfs>
+</styleSheet>`;
+
+  const xlsxBlob = buildZipArchive([
+    { name: '[Content_Types].xml', content: contentTypesXml },
+    { name: '_rels/.rels', content: relsXml },
+    { name: 'xl/workbook.xml', content: workbookXml },
+    { name: 'xl/_rels/workbook.xml.rels', content: workbookRelsXml },
+    { name: 'xl/styles.xml', content: stylesXml },
+    { name: 'xl/worksheets/sheet1.xml', content: sheet1Xml },
+  ]);
+
+  const url = URL.createObjectURL(xlsxBlob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = `Resultados_Integridad_MIDIS_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+};
+
+// ============================================================================
+// GENERADOR NATIVO DE PDF CON EMBLEMA OFICIAL DEL MIDIS INCRUSTADO
+// ============================================================================
+
+interface PdfLogoImageData {
+  jpegBytes: Uint8Array;
+  width: number;
+  height: number;
+}
+
+const dataUrlToUint8Array = (dataUrl: string): Uint8Array => {
+  const base64 = dataUrl.split(',')[1] || '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+};
+
+const renderFallbackMidisEmblemToJpeg = (): PdfLogoImageData => {
+  const w = 540;
+  const h = 108;
+  const canvas = document.createElement('canvas');
+  canvas.width = w;
+  canvas.height = h;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, w, h);
+
+  ctx.strokeStyle = '#CBD5E1';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(1, 1, w - 2, h - 2);
+
+  // Bloque 1: Escudo Nacional + República del Perú
+  ctx.fillStyle = '#0F172A';
+  ctx.font = 'bold 11px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('REPÚBLICA DEL PERÚ', 70, 22);
+
+  ctx.strokeStyle = '#15803D';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.arc(70, 58, 22, 0.75 * Math.PI, 1.25 * Math.PI);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(70, 58, 22, -0.25 * Math.PI, 0.25 * Math.PI);
+  ctx.stroke();
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.strokeStyle = '#B91C1C';
+  ctx.lineWidth = 2.5;
+  ctx.fillRect(55, 38, 30, 36);
+  ctx.strokeRect(55, 38, 30, 36);
+
+  ctx.fillStyle = '#38BDF8';
+  ctx.fillRect(56.5, 39.5, 13.5, 15);
+  ctx.fillStyle = '#DC2626';
+  ctx.fillRect(56.5, 55, 27, 17.5);
+  ctx.fillStyle = '#FACC15';
+  ctx.beginPath();
+  ctx.arc(70, 63.5, 4, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Bloque 2: Rojo PERÚ
+  ctx.fillStyle = '#D91023';
+  ctx.fillRect(140, 2, 118, h - 4);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 31px Arial, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.fillText('PERÚ', 199, 64);
+
+  // Bloque 3: Gris Institucional MIDIS
+  ctx.fillStyle = '#575756';
+  ctx.fillRect(260, 2, w - 262, h - 4);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.font = 'bold 21px Arial, sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillText('Ministerio de Desarrollo', 276, 48);
+  ctx.fillText('e Inclusión Social', 276, 75);
+
+  const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+  return {
+    jpegBytes: dataUrlToUint8Array(jpegDataUrl),
+    width: w,
+    height: h,
+  };
+};
+
+const loadMidisLogoForPdf = async (
+  customLogoUrl?: string | null
+): Promise<PdfLogoImageData> => {
+  const candidates: string[] = [];
+  if (customLogoUrl) candidates.push(customLogoUrl);
+  candidates.push('./logo-midis.png', '/logo-midis.png', './MIDIS.png', '/MIDIS.png', './MIDIS (1).png');
+
+  for (const src of candidates) {
+    try {
+      const loadedImg = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const img = new Image();
+        img.crossOrigin = 'anonymous';
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('Image load failed'));
+        img.src = src;
+      });
+
+      if (loadedImg.naturalWidth > 0 && loadedImg.naturalHeight > 0) {
+        const targetH = 140;
+        const scale = targetH / loadedImg.naturalHeight;
+        const targetW = Math.max(140, Math.round(loadedImg.naturalWidth * scale));
+
+        const canvas = document.createElement('canvas');
+        canvas.width = targetW;
+        canvas.height = targetH;
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.fillStyle = '#FFFFFF';
+          ctx.fillRect(0, 0, targetW, targetH);
+          ctx.drawImage(loadedImg, 0, 0, targetW, targetH);
+          const jpegDataUrl = canvas.toDataURL('image/jpeg', 0.95);
+          return {
+            jpegBytes: dataUrlToUint8Array(jpegDataUrl),
+            width: targetW,
+            height: targetH,
+          };
+        }
+      }
+    } catch {
+      // Probar siguiente candidato
+    }
+  }
+
+  return renderFallbackMidisEmblemToJpeg();
+};
 
 const encodeWinAnsiBytes = (text: string): number[] => {
   const bytes: number[] = [];
@@ -934,15 +1391,17 @@ const wrapPdfLine = (text: string, maxChars: number): string[] => {
   return lines;
 };
 
-const downloadDirectPdfReport = (
+const downloadDirectPdfReport = async (
   participant: ParticipantRecord,
   config: AppConfig
-): void => {
+): Promise<void> => {
+  const logoData = await loadMidisLogoForPdf(config.customLogoDataUrl);
+
   const pageWidth = 595.28;
   const pageHeight = 841.89;
   const marginX = 44;
   const contentWidth = pageWidth - marginX * 2;
-  const topMargin = 46;
+  const topMargin = 44;
   const bottomMargin = 48;
 
   const pagesOps: number[][] = [[]];
@@ -1013,31 +1472,26 @@ const downloadDirectPdfReport = (
     }
   };
 
-  const bannerHeight = 36;
-  const bannerY = currentY - bannerHeight + 10;
+  // Encabezado con Logotipo Oficial del MIDIS incrustado como imagen
+  const aspect = logoData.width / Math.max(1, logoData.height);
+  const logoH = 42;
+  const logoW = Math.min(250, logoH * aspect);
+  const bannerY = currentY - logoH + 10;
 
-  pushOps(`0.98 0.98 0.99 rg ${marginX} ${bannerY} 72 ${bannerHeight} re f`);
-  pushOps(`0.75 0.78 0.82 RG 0.6 w ${marginX} ${bannerY} 72 ${bannerHeight} re S`);
-  pushTextOp('REPUBLICA', marginX + 13, bannerY + 21, 'F2', 7.2, [0.1, 0.13, 0.18]);
-  pushTextOp('DEL PERU', marginX + 16, bannerY + 11, 'F2', 7.2, [0.1, 0.13, 0.18]);
+  pushOps(`q ${logoW.toFixed(2)} 0 0 ${logoH.toFixed(2)} ${marginX.toFixed(2)} ${bannerY.toFixed(2)} cm /Im1 Do Q`);
 
-  pushOps(`0.851 0.063 0.137 rg ${marginX + 72} ${bannerY} 54 ${bannerHeight} re f`);
-  pushTextOp('PERÚ', marginX + 83, bannerY + 13, 'F2', 12.5, [1, 1, 1]);
-
-  pushOps(`0.341 0.341 0.337 rg ${marginX + 126} ${bannerY} 144 ${bannerHeight} re f`);
-  pushTextOp('Ministerio de Desarrollo', marginX + 134, bannerY + 21, 'F2', 8.5, [1, 1, 1]);
-  pushTextOp('e Inclusión Social', marginX + 134, bannerY + 10, 'F2', 8.5, [1, 1, 1]);
-
-  pushTextOp('TALLER VIRTUAL DE INTEGRIDAD PÚBLICA', marginX + 282, bannerY + 23, 'F2', 8.2, [0.75, 0.08, 0.15]);
-  const titleLines = wrapPdfLine(config.workshopTitle, 42);
+  const titleX = marginX + logoW + 14;
+  pushTextOp('TALLER VIRTUAL DE INTEGRIDAD PÚBLICA', titleX, bannerY + 27, 'F2', 8.2, [0.75, 0.08, 0.15]);
+  const titleLines = wrapPdfLine(config.workshopTitle, 44);
   titleLines.slice(0, 2).forEach((tLine: string, idx: number) => {
-    pushTextOp(tLine, marginX + 282, bannerY + 12 - idx * 10, 'F2', 8.5, [0.08, 0.11, 0.17]);
+    pushTextOp(tLine, titleX, bannerY + 15 - idx * 11, 'F2', 8.8, [0.08, 0.11, 0.17]);
   });
 
   currentY = bannerY - 12;
   pushOps(`0.851 0.063 0.137 RG 1.5 w ${marginX} ${currentY} m ${pageWidth - marginX} ${currentY} l S`);
   currentY -= 18;
 
+  // Ficha del participante
   const cardHeight = 86;
   const cardY = currentY - cardHeight + 8;
   pushOps(`0.97 0.98 0.99 rg ${marginX} ${cardY} ${contentWidth} ${cardHeight} re f`);
@@ -1189,11 +1643,15 @@ const downloadDirectPdfReport = (
     for (let i = 0; i < suffix.length; i++) target.push(suffix.charCodeAt(i) & 0xff);
   });
 
+  // Ensamblaje binario PDF 1.4 con /XObject /Image (Objeto 5)
   const pdfBytes: number[] = [];
   const appendAscii = (s: string) => {
     for (let i = 0; i < s.length; i++) pdfBytes.push(s.charCodeAt(i) & 0xff);
   };
   const appendBytes = (arr: number[]) => {
+    for (let i = 0; i < arr.length; i++) pdfBytes.push(arr[i]);
+  };
+  const appendUint8 = (arr: Uint8Array) => {
     for (let i = 0; i < arr.length; i++) pdfBytes.push(arr[i]);
   };
 
@@ -1214,8 +1672,15 @@ const downloadDirectPdfReport = (
   startObj(4);
   appendAscii('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>\nendobj\n');
 
+  startObj(5);
+  appendAscii(
+    `<< /Type /XObject /Subtype /Image /Width ${logoData.width} /Height ${logoData.height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${logoData.jpegBytes.length} >>\nstream\n`
+  );
+  appendUint8(logoData.jpegBytes);
+  appendAscii('\nendstream\nendobj\n');
+
   const pageObjNumbers: number[] = [];
-  let nextObjNum = 5;
+  let nextObjNum = 6;
 
   for (const streamBytes of pagesOps) {
     const pageObj = nextObjNum++;
@@ -1224,7 +1689,7 @@ const downloadDirectPdfReport = (
 
     startObj(pageObj);
     appendAscii(
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents ${contentObj} 0 R >>\nendobj\n`
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pageWidth} ${pageHeight}] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> /XObject << /Im1 5 0 R >> >> /Contents ${contentObj} 0 R >>\nendobj\n`
     );
 
     startObj(contentObj);
@@ -1423,7 +1888,7 @@ const MidisOfficialEmblem: React.FC<MidisEmblemProps> = ({
 };
 
 // ============================================================================
-// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.0.1)
+// COMPONENTE PRINCIPAL DE LA APLICACIÓN (v5.2.0)
 // ============================================================================
 
 export default function App() {
@@ -1508,7 +1973,9 @@ export default function App() {
   const [isGrading, setIsGrading] = useState(false);
   const [showIntegralReportModal, setShowIntegralReportModal] = useState(false);
 
+  // Contador regresivo de 60 segundos al ver la pantalla final + cierre inmediato tras descargar PDF
   const [closingCountdown, setClosingCountdown] = useState<number | null>(null);
+  const [isPdfDownloadedClosing, setIsPdfDownloadedClosing] = useState(false);
 
   const feedbackPanelRef = useRef<HTMLDivElement | null>(null);
 
@@ -1523,6 +1990,7 @@ export default function App() {
   const [sheetsStatus, setSheetsStatus] = useState<'idle' | 'syncing' | 'connected' | 'error'>('idle');
   const [sheetsStatusMessage, setSheetsStatusMessage] = useState('');
   const [sheetsUrlDraft, setSheetsUrlDraft] = useState(config.googleSheetsUrl);
+  const [spreadsheetUrlDraft, setSpreadsheetUrlDraft] = useState(config.googleSpreadsheetUrl);
   const [teacherUserDraft, setTeacherUserDraft] = useState(config.teacherUser);
   const [teacherPassDraft, setTeacherPassDraft] = useState(config.teacherPass);
   const [configSavedNotice, setConfigSavedNotice] = useState('');
@@ -1562,17 +2030,35 @@ export default function App() {
     }
   }, [activeSession]);
 
+  // Limpia la sesión activa y regresa a la página de inicio sin duplicar registros
+  const finishAndReturnToHome = () => {
+    setClosingCountdown(null);
+    setIsPdfDownloadedClosing(false);
+    setShowIntegralReportModal(false);
+    setActiveSession(null);
+    setCurrentQuestionIndex(0);
+    setSelectedOption(null);
+    setJustificationText('');
+    setFullName('');
+    setDni('');
+    setEmail('');
+    setConsent(false);
+    setFormError('');
+    try {
+      localStorage.removeItem(STORAGE_KEYS.ACTIVE_SESSION);
+      localStorage.removeItem(STORAGE_KEYS.LEGACY_ACTIVE_SESSION);
+    } catch {
+      // Ignorar
+    }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  // Temporizador automático de 60 segundos en la pantalla de finalización
   useEffect(() => {
-    if (closingCountdown === null) return;
+    if (closingCountdown === null || isPdfDownloadedClosing) return;
 
     if (closingCountdown <= 0) {
-      setClosingCountdown(null);
-      try {
-        window.close();
-      } catch {
-        // Bloqueado por política de seguridad del navegador
-      }
-      setShowIntegralReportModal(false);
+      finishAndReturnToHome();
       return;
     }
 
@@ -1581,7 +2067,8 @@ export default function App() {
     }, 1000);
 
     return () => window.clearTimeout(timer);
-  }, [closingCountdown]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [closingCountdown, isPdfDownloadedClosing]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1686,8 +2173,31 @@ export default function App() {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const data: { status?: string; records?: unknown[]; rows?: unknown[] } =
-        await response.json();
+      const data: {
+        status?: string;
+        spreadsheetUrl?: string;
+        spreadsheetName?: string;
+        records?: unknown[];
+        rows?: unknown[];
+      } = await response.json();
+
+      if (data?.spreadsheetUrl || data?.spreadsheetName) {
+        setConfig((prev: AppConfig) => ({
+          ...prev,
+          googleSpreadsheetUrl:
+            typeof data.spreadsheetUrl === 'string' && data.spreadsheetUrl.startsWith('http')
+              ? data.spreadsheetUrl
+              : prev.googleSpreadsheetUrl,
+          googleSpreadsheetName:
+            typeof data.spreadsheetName === 'string' && data.spreadsheetName.trim()
+              ? data.spreadsheetName.trim()
+              : prev.googleSpreadsheetName,
+        }));
+        if (typeof data.spreadsheetUrl === 'string' && data.spreadsheetUrl.startsWith('http')) {
+          setSpreadsheetUrlDraft(data.spreadsheetUrl);
+        }
+      }
+
       const rawList: unknown[] | null = Array.isArray(data?.records)
         ? data.records
         : Array.isArray(data?.rows)
@@ -1711,7 +2221,9 @@ export default function App() {
         });
 
         setSheetsStatus('connected');
-        setSheetsStatusMessage(`Google Sheets Conectado (${remoteRecords.length} registros en nube).`);
+        setSheetsStatusMessage(
+          `Conectado a "${data.spreadsheetName || config.googleSpreadsheetName}" (${remoteRecords.length} registros).`
+        );
       } else {
         setSheetsStatus('error');
         setSheetsStatusMessage('Respuesta inesperada de Google Apps Script.');
@@ -1882,15 +2394,23 @@ export default function App() {
       setCurrentQuestionIndex((prev: number) => prev + 1);
       window.scrollTo({ top: 0, behavior: 'smooth' });
     } else {
-      setClosingCountdown(null);
+      // Inicia automáticamente el contador de 60 segundos al ver la pantalla de finalización
+      setIsPdfDownloadedClosing(false);
       setShowIntegralReportModal(true);
+      setClosingCountdown(60);
     }
   };
 
-  const handleDownloadDirectPdf = (record: ParticipantRecord, startAutoCloseCountdown = false) => {
-    downloadDirectPdfReport(record, config);
-    if (startAutoCloseCountdown) {
-      setClosingCountdown(10);
+  const handleDownloadDirectPdf = async (
+    record: ParticipantRecord,
+    autoCloseAfterDownload = false
+  ) => {
+    await downloadDirectPdfReport(record, config);
+    if (autoCloseAfterDownload) {
+      setIsPdfDownloadedClosing(true);
+      window.setTimeout(() => {
+        finishAndReturnToHome();
+      }, 1200);
     }
   };
 
@@ -1914,66 +2434,20 @@ export default function App() {
     }
   };
 
-  const handleExportExcelCsv = () => {
-    const headers = [
-      'Participante',
-      'DNI',
-      'Correo Electrónico',
-      'Hora de ingreso',
-      'Hora de fin',
-      'Progreso',
-      'Caso 1 (6.5 pts)',
-      'Caso 2 (6.5 pts)',
-      'Caso 3 (7.0 pts)',
-      'Puntaje Total (20 pts)',
-      'Nivel de Desempeño',
-      ...allQuestions.flatMap((q: CaseQuestion) => [
-        `P${q.number} Respuesta`,
-        `P${q.number} Puntos`,
-        `P${q.number} Sustento`,
-      ]),
-    ];
-
-    const escapeCsv = (val: unknown) => {
-      const str = String(val ?? '').replace(/"/g, '""');
-      return `"${str}"`;
-    };
-
-    const rows = cohort.map((p: ParticipantRecord) => {
-      const answeredCount = Object.keys(p.answers || {}).length;
-      return [
-        p.fullName,
-        `="${p.dni}"`,
-        p.email,
-        formatTimestamp(p.startedAt),
-        p.completedAt ? formatTimestamp(p.completedAt) : 'En curso',
-        `${answeredCount} / 12`,
-        (Number(p.case1Score) || 0).toFixed(1),
-        (Number(p.case2Score) || 0).toFixed(1),
-        (Number(p.case3Score) || 0).toFixed(1),
-        (Number(p.totalScore) || 0).toFixed(1),
-        p.level,
-        ...allQuestions.flatMap((q: CaseQuestion) => {
-          const ans = p.answers?.[q.id];
-          return ans
-            ? [ans.selectedOption, (Number(ans.pointsEarned) || 0).toFixed(1), ans.justification]
-            : ['-', '0.0', ''];
-        }),
-      ]
-        .map(escapeCsv)
-        .join(',');
-    });
-
-    const csvContent = '\uFEFF' + [headers.map(escapeCsv).join(','), ...rows].join('\n');
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `Resultados_Integridad_MIDIS_${new Date().toISOString().slice(0, 10)}.csv`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+  const handleOpenGoogleSheet = () => {
+    const directUrl = (config.googleSpreadsheetUrl || '').trim();
+    if (directUrl.startsWith('http')) {
+      window.open(directUrl, '_blank', 'noopener,noreferrer');
+    } else {
+      const sheetNameQuery = encodeURIComponent(
+        config.googleSpreadsheetName || 'Resultados_Taller_Integridad_MIDIS'
+      );
+      window.open(
+        `https://drive.google.com/drive/search?q=${sheetNameQuery}`,
+        '_blank',
+        'noopener,noreferrer'
+      );
+    }
   };
 
   const handleResetPlatform = async () => {
@@ -2045,6 +2519,7 @@ export default function App() {
     const updated: AppConfig = {
       ...config,
       googleSheetsUrl: sheetsUrlDraft.trim() || FIXED_APPS_SCRIPT_URL,
+      googleSpreadsheetUrl: spreadsheetUrlDraft.trim(),
       teacherUser: teacherUserDraft.trim() || DEFAULT_CONFIG.teacherUser,
       teacherPass: teacherPassDraft || DEFAULT_CONFIG.teacherPass,
     };
@@ -2183,15 +2658,15 @@ export default function App() {
 
                   <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs">
                     <div className="flex items-center justify-between text-slate-500 text-xs font-semibold uppercase">
-                      <span>Estado de Base de Datos</span>
+                      <span>Libro Google Sheets</span>
                       <Database className="w-4 h-4 text-emerald-600" />
                     </div>
-                    <div className="text-sm font-bold text-slate-800 mt-1.5">
-                      {sheetsStatusMessage ||
-                        (isSheetsConfigured ? 'Listo para sincronizar' : 'Almacenamiento local')}
+                    <div className="text-sm font-bold text-slate-900 mt-1 truncate">
+                      {config.googleSpreadsheetName || 'Resultados_Taller_Integridad_MIDIS'}
                     </div>
                     <div className="text-xs text-slate-500 mt-0.5">
-                      Sincronización controlada con Google Sheets
+                      Pestaña: <strong>Resultados</strong> ·{' '}
+                      {sheetsStatus === 'connected' ? 'En línea' : 'Listo'}
                     </div>
                   </div>
                 </div>
@@ -2210,12 +2685,21 @@ export default function App() {
                     </button>
 
                     <button
-                      onClick={handleExportExcelCsv}
+                      onClick={handleOpenGoogleSheet}
+                      className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-blue-700 hover:bg-blue-800 text-white flex items-center gap-1.5 transition"
+                      title={`Abrir ${config.googleSpreadsheetName} (pestaña Resultados)`}
+                    >
+                      <ExternalLink className="w-4 h-4" />
+                      Abrir Google Sheets
+                    </button>
+
+                    <button
+                      onClick={() => exportCohortToSingleSheetExcel(safeCohort, allQuestions)}
                       disabled={safeCohort.length === 0}
                       className="px-3.5 py-2 rounded-lg text-xs sm:text-sm font-semibold bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white flex items-center gap-1.5 transition"
                     >
                       <Download className="w-4 h-4" />
-                      Descargar Excel (CSV)
+                      Descargar Excel (.xlsx)
                     </button>
                   </div>
 
@@ -2320,7 +2804,7 @@ export default function App() {
                                 </td>
                                 <td className="py-3 px-3 text-center">
                                   <button
-                                    onClick={() => handleDownloadDirectPdf(p, false)}
+                                    onClick={() => void handleDownloadDirectPdf(p, false)}
                                     className="inline-flex items-center gap-1 px-2.5 py-1 rounded bg-slate-900 hover:bg-slate-800 text-white text-xs font-medium"
                                   >
                                     <FileText className="w-3.5 h-3.5" />
@@ -2343,8 +2827,8 @@ export default function App() {
                     Configuración Institucional, Marca y Conexión Google Sheets
                   </h2>
                   <p className="text-xs text-slate-500 mt-1">
-                    Personaliza el logotipo oficial, las credenciales docentes y la URL de
-                    sincronización en nube.
+                    Personaliza el logotipo oficial, las credenciales docentes y el enlace directo
+                    a tu hoja <strong>Resultados_Taller_Integridad_MIDIS</strong>.
                   </p>
                 </div>
 
@@ -2357,7 +2841,7 @@ export default function App() {
 
                 <div className="border border-slate-200 rounded-lg p-4 bg-slate-50 space-y-3">
                   <div className="text-xs font-bold uppercase text-slate-700">
-                    Logotipo Institucional Actual
+                    Logotipo Institucional Actual (Visible en cabecera y PDF)
                   </div>
                   <div className="flex flex-wrap items-center justify-between gap-4">
                     <MidisOfficialEmblem customLogoUrl={config.customLogoDataUrl} />
@@ -2399,6 +2883,23 @@ export default function App() {
                       placeholder="https://script.google.com/macros/s/.../exec"
                       className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-red-600"
                     />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold text-slate-700 mb-1">
+                      Enlace directo a la Hoja de Cálculo ({config.googleSpreadsheetName})
+                    </label>
+                    <input
+                      type="url"
+                      value={spreadsheetUrlDraft}
+                      onChange={(e) => setSpreadsheetUrlDraft(e.target.value)}
+                      placeholder="https://docs.google.com/spreadsheets/d/..."
+                      className="w-full rounded-lg border border-slate-300 px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-red-600"
+                    />
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Libro: <strong>{config.googleSpreadsheetName}</strong> · Pestaña:{' '}
+                      <code>Resultados</code>.
+                    </p>
                   </div>
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2478,11 +2979,11 @@ export default function App() {
               </div>
               <button
                 type="button"
-                onClick={() => handleDownloadDirectPdf(activeSession, false)}
+                onClick={() => void handleDownloadDirectPdf(activeSession, false)}
                 className="px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 border border-red-200 text-xs font-semibold flex items-center gap-1.5 transition"
               >
                 <FileText className="w-3.5 h-3.5" />
-                Ver Reporte Integral
+                Descargar PDF
               </button>
             </div>
           )}
@@ -2911,7 +3412,7 @@ export default function App() {
                   ¡Simulador Completado!
                 </h3>
                 <p className="text-xs text-slate-500">
-                  Resultados registrados correctamente en el sistema del taller.
+                  Tus resultados quedaron guardados correctamente sin duplicidad.
                 </p>
               </div>
             </div>
@@ -2937,45 +3438,56 @@ export default function App() {
               </div>
             </div>
 
-            {closingCountdown !== null && (
-              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 space-y-2">
-                <div className="flex items-center justify-between text-xs font-bold text-emerald-900">
-                  <span className="flex items-center gap-1.5">
-                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                    Reporte PDF descargado en tu equipo.
-                  </span>
-                  <span className="px-2 py-0.5 rounded bg-emerald-700 text-white font-mono">
-                    {closingCountdown}s
-                  </span>
-                </div>
-                <p className="text-xs text-emerald-800">
-                  Finalizando ventana en <strong>{closingCountdown} segundos</strong> y regresando
-                  al simulador...
-                </p>
-                <div className="w-full h-1.5 bg-emerald-200 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-emerald-600 transition-all duration-1000 ease-linear"
-                    style={{ width: `${(closingCountdown / 10) * 100}%` }}
-                  />
-                </div>
+            {isPdfDownloadedClosing ? (
+              <div className="p-3.5 rounded-xl bg-emerald-50 border border-emerald-200 flex items-center gap-2 text-xs font-bold text-emerald-900">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span>
+                  Reporte PDF descargado con logotipo institucional. Cerrando sesión y
+                  regresando a la página de inicio...
+                </span>
               </div>
+            ) : (
+              closingCountdown !== null && (
+                <div className="p-3.5 rounded-xl bg-amber-50 border border-amber-200 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-950">
+                    <span className="flex items-center gap-1.5">
+                      <Clock className="w-4 h-4 text-amber-700 shrink-0" />
+                      Cierre automático hacia la página de inicio:
+                    </span>
+                    <span className="px-2.5 py-0.5 rounded bg-slate-900 text-white font-mono">
+                      {closingCountdown}s
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-900">
+                    Descarga tu reporte PDF (se cerrará automáticamente tras la descarga) o espera{' '}
+                    <strong>{closingCountdown} segundos</strong> para volver a la{' '}
+                    <strong>página de inicio</strong>.
+                  </p>
+                  <div className="w-full h-1.5 bg-amber-200 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-red-600 transition-all duration-1000 ease-linear"
+                      style={{ width: `${(closingCountdown / 60) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              )
             )}
 
             <div className="flex flex-wrap items-center justify-end gap-2 pt-2">
               <button
                 type="button"
-                onClick={() => {
-                  setClosingCountdown(null);
-                  setShowIntegralReportModal(false);
-                }}
-                className="px-4 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-medium text-slate-700 hover:bg-slate-50"
+                disabled={isPdfDownloadedClosing}
+                onClick={finishAndReturnToHome}
+                className="px-4 py-2 rounded-xl border border-slate-300 text-xs sm:text-sm font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5"
               >
-                {closingCountdown !== null ? 'Regresar ahora al simulador' : 'Revisar respuestas'}
+                <Home className="w-4 h-4" />
+                Volver al inicio ahora
               </button>
               <button
                 type="button"
-                onClick={() => handleDownloadDirectPdf(activeSession, true)}
-                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5"
+                disabled={isPdfDownloadedClosing}
+                onClick={() => void handleDownloadDirectPdf(activeSession, true)}
+                className="px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-xs sm:text-sm font-bold inline-flex items-center gap-1.5"
               >
                 <Download className="w-4 h-4" />
                 Descargar Reporte Integral (PDF)
